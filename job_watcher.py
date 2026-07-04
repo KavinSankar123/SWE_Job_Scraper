@@ -206,6 +206,46 @@ COMPANIES = [
         "url": "https://careers.twosigma.com/careers/OpenRoles",
         "newgrad_mode": "filter",
     },
+
+    # ---- Even more feeds -------------------------------------------------- #
+    {
+        "name": "Tower Research",
+        "adapter": "greenhouse",
+        "board_token": "towerresearchcapital",
+        "newgrad_mode": "filter",
+    },
+    {
+        "name": "Blackedge Capital",
+        "adapter": "greenhouse",
+        "board_token": "blackedgecapital",
+        "newgrad_mode": "filter",
+    },
+    {
+        "name": "Walleye Capital",
+        "adapter": "greenhouse",
+        "board_token": "walleyecapital-external-students",  # dedicated students board
+        "newgrad_mode": "scoped",
+    },
+    {
+        "name": "Akuna Capital",
+        "adapter": "greenhouse",
+        "board_token": "akunacapital",
+        "newgrad_mode": "filter",
+    },
+    {
+        "name": "Point72",
+        "adapter": "greenhouse",
+        "board_token": "point72",
+        "newgrad_mode": "filter",
+    },
+    {
+        "name": "Arrowstreet Capital",
+        "adapter": "workday",              # Workday CXS JSON API; Campus_Careers site
+        "wd_host": "arrowstreetcapital.wd5.myworkdayjobs.com",
+        "wd_tenant": "arrowstreetcapital",
+        "wd_site": "Campus_Careers",
+        "newgrad_mode": "scoped",
+    },
 ]
 
 
@@ -217,6 +257,21 @@ def http_get(url: str, params: dict | None = None, tries: int = 3, timeout: int 
     for attempt in range(1, tries + 1):
         try:
             r = requests.get(url, params=params, headers=HEADERS, timeout=timeout)
+            r.raise_for_status()
+            return r
+        except Exception as e:  # noqa: BLE001
+            last = e
+            if attempt < tries:
+                time.sleep(1.5 * attempt)
+    raise last  # type: ignore[misc]
+
+
+def http_post(url: str, json_body: dict | None = None, tries: int = 3, timeout: int = 30) -> requests.Response:
+    headers = {**HEADERS, "Accept": "application/json", "Content-Type": "application/json"}
+    last = None
+    for attempt in range(1, tries + 1):
+        try:
+            r = requests.post(url, json=json_body, headers=headers, timeout=timeout)
             r.raise_for_status()
             return r
         except Exception as e:  # noqa: BLE001
@@ -592,6 +647,42 @@ def fetch_avature(cfg: dict, debug: bool = False) -> list[Job]:
 
 
 # --------------------------------------------------------------------------- #
+# Adapter: Workday  (Arrowstreet; the "CXS" JSON API behind myworkdayjobs sites)
+#   POST /wday/cxs/<tenant>/<site>/jobs with {offset, limit} -> {total, jobPostings}.
+#   The user-facing job page is /en-US/<site><externalPath>.
+# --------------------------------------------------------------------------- #
+def _parse_workday_jobs(payload: dict, company: str, host: str, site: str) -> list[Job]:
+    out: list[Job] = []
+    for jp in (payload or {}).get("jobPostings", []):
+        ext = (jp.get("externalPath") or "").strip()
+        bullets = jp.get("bulletFields") or []
+        jid = str(bullets[0] if bullets else ext).strip()
+        if not jid:
+            continue
+        url = f"https://{host}/en-US/{site}{ext}" if ext else f"https://{host}/{site}"
+        out.append(Job(company, jid, (jp.get("title") or "").strip(),
+                       (jp.get("locationsText") or "").strip(), "", url))
+    return out
+
+
+def fetch_workday(cfg: dict, debug: bool = False) -> list[Job]:
+    host, tenant, site = cfg["wd_host"], cfg["wd_tenant"], cfg["wd_site"]
+    endpoint = f"https://{host}/wday/cxs/{tenant}/{site}/jobs"
+    limit = 20
+    jobs: dict[str, Job] = {}
+    for offset in range(0, 2000, limit):      # safety cap at 100 pages
+        r = http_post(endpoint, {"appliedFacets": {}, "limit": limit, "offset": offset, "searchText": ""})
+        if debug and offset == 0:
+            _dump_debug(cfg["name"], r.text)
+        data = r.json()
+        for j in _parse_workday_jobs(data, cfg["name"], host, site):
+            jobs.setdefault(j.job_id, j)
+        if offset + limit >= int(data.get("total", 0)):
+            break
+    return list(jobs.values())
+
+
+# --------------------------------------------------------------------------- #
 # Filtering / helpers
 # --------------------------------------------------------------------------- #
 def _hash(s: str) -> str:
@@ -623,9 +714,10 @@ ADAPTERS = {
     "drw": fetch_drw,
     "sig_api": fetch_sig,
     "avature": fetch_avature,
+    "workday": fetch_workday,
 }
 # Adapters that accept a debug= kwarg (they can dump their raw/rendered response).
-_DEBUG_ADAPTERS = ("citadel_ajax", "playwright", "drw", "sig_api", "avature")
+_DEBUG_ADAPTERS = ("citadel_ajax", "playwright", "drw", "sig_api", "avature", "workday")
 
 
 def scrape_company(cfg: dict, debug: bool = False, mode: str | None = None) -> tuple[list[Job], list[Job]]:
@@ -983,6 +1075,22 @@ def selftest() -> int:
     av_kept = [j for j in av.values() if is_target_role(j, "filter")]
     ok &= _check("avature filter keeps campus SWE, drops business manager",
                  [j.title for j in av_kept] == ["Software Engineer - Campus"])
+
+    wd_payload = {"total": 2, "jobPostings": [
+        {"title": "Software Engineer, Campus", "locationsText": "Boston",
+         "externalPath": "/job/Boston/Software-Engineer-Campus_R100", "bulletFields": ["R100"]},
+        {"title": "Quantitative Researcher", "locationsText": "Boston",
+         "externalPath": "/job/Boston/Quantitative-Researcher_R101", "bulletFields": ["R101"]},
+    ]}
+    wd = _parse_workday_jobs(wd_payload, "Arrowstreet Capital",
+                             "arrowstreetcapital.wd5.myworkdayjobs.com", "Campus_Careers")
+    ok &= _check("workday parses 2 postings", len(wd) == 2)
+    ok &= _check("workday builds /en-US/<site> job URL",
+                 wd[0].url == "https://arrowstreetcapital.wd5.myworkdayjobs.com/en-US/"
+                              "Campus_Careers/job/Boston/Software-Engineer-Campus_R100")
+    wd_kept = [j for j in wd if is_target_role(j, "scoped")]
+    ok &= _check("workday scoped keeps SWE, drops researcher",
+                 [j.title for j in wd_kept] == ["Software Engineer, Campus"])
 
     print("\nSELF-TEST:", "ALL PASSED ✅" if ok else "FAILURES ❌")
     return 0 if ok else 1

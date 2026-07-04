@@ -98,7 +98,9 @@ Tip: if you use the internal `--interval` loop on a laptop, wrap it with
 ## How each firm is reached
 
 Most firms expose a clean data feed and work out of the box:
-- **Greenhouse JSON API** — Radix, Hudson River Trading, Five Rings, Jump Trading, Flow Traders
+- **Greenhouse JSON API** — Radix, Hudson River Trading, Five Rings, Jump Trading, Flow
+  Traders, Tower Research, Blackedge, Walleye (students board), Akuna, Point72
+- **Workday CXS JSON API** — Arrowstreet Capital (`Campus_Careers` site)
 - **Custom JSON / embedded data** — D.E. Shaw (server HTML), DRW (Next.js `__NEXT_DATA__`),
   SIG (`careers.sig.com/api/jobs`, pre-filtered to New Graduates)
 - **Avature HTML** — Two Sigma (server-rendered `JobDetail` links, paginated via `?jobOffset=`)

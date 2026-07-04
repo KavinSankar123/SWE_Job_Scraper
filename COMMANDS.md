@@ -52,8 +52,9 @@ Emails only postings you haven't seen before; sends nothing if there's nothing n
 
 Firm names: `Radix Trading`, `Hudson River Trading`, `D.E. Shaw`, `Citadel`,
 `Citadel Securities`, `DRW`, `Five Rings`, `Jump Trading`, `Flow Traders`, `SIG`,
-`Two Sigma`. The first run for a firm emails everything currently open there, then
-only new postings after that.
+`Two Sigma`, `Tower Research`, `Blackedge Capital`, `Walleye Capital`, `Akuna Capital`,
+`Point72`, `Arrowstreet Capital`. The first run for a firm emails everything currently
+open there, then only new postings after that.
 
 ---
 
