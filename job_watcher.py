@@ -174,6 +174,38 @@ COMPANIES = [
         # Jobs ship inside the page's Next.js __NEXT_DATA__ payload — no browser needed.
         "newgrad_mode": "filter",
     },
+
+    # ---- More clean feeds ------------------------------------------------- #
+    {
+        "name": "Five Rings",
+        "adapter": "greenhouse",
+        "board_token": "fiveringsllc",     # full board -> filter to new-grad
+        "newgrad_mode": "filter",
+    },
+    {
+        "name": "Jump Trading",
+        "adapter": "greenhouse",
+        "board_token": "jumptrading",      # /hr/students-new-grads is a Greenhouse board
+        "newgrad_mode": "filter",
+    },
+    {
+        "name": "Flow Traders",
+        "adapter": "greenhouse",
+        "board_token": "flowtraders",      # careers site is a Greenhouse front-end (Vue)
+        "newgrad_mode": "filter",
+    },
+    {
+        "name": "SIG",
+        "adapter": "sig_api",              # careers.sig.com/api/jobs JSON, pre-filtered
+        "category": "New Graduates",       #   to the New Graduates category
+        "newgrad_mode": "scoped",
+    },
+    {
+        "name": "Two Sigma",
+        "adapter": "avature",              # Avature portal; server-rendered JobDetail links
+        "url": "https://careers.twosigma.com/careers/OpenRoles",
+        "newgrad_mode": "filter",
+    },
 ]
 
 
@@ -476,6 +508,90 @@ def fetch_drw(cfg: dict, debug: bool = False) -> list[Job]:
 
 
 # --------------------------------------------------------------------------- #
+# Adapter: SIG  (careers.sig.com custom JSON API, backed by iCIMS)
+#   The public site calls /api/jobs?categories=...&page=&limit=; we hit it
+#   directly, keeping the category pre-filtered to new-grad postings.
+# --------------------------------------------------------------------------- #
+def _parse_sig_jobs(payload: dict, company: str) -> list[Job]:
+    out: list[Job] = []
+    for item in (payload or {}).get("jobs", []):
+        d = item.get("data", item) if isinstance(item, dict) else {}
+        jid = str(d.get("req_id") or d.get("slug") or "").strip()
+        if not jid:
+            continue
+        cats = d.get("categories") or []
+        dept = ", ".join(c.get("name", "").strip() for c in cats if isinstance(c, dict))
+        loc = (d.get("full_location")
+               or ", ".join(filter(None, (d.get("city"), d.get("state"), d.get("country")))))
+        out.append(Job(
+            company=company, job_id=jid,
+            title=(d.get("title") or "").strip(),
+            location=loc, department=dept or (d.get("department") or ""),
+            url=f"https://careers.sig.com/jobs/{d.get('slug') or jid}",
+        ))
+    return out
+
+
+def fetch_sig(cfg: dict, debug: bool = False) -> list[Job]:
+    endpoint = cfg.get("api", "https://careers.sig.com/api/jobs")
+    limit = 100
+    jobs: dict[str, Job] = {}
+    for page in range(1, 21):  # paginate defensively; the new-grad set is small
+        r = http_get(endpoint, params={"categories": cfg.get("category", "New Graduates"),
+                                       "page": str(page), "limit": str(limit)})
+        if debug and page == 1:
+            _dump_debug(cfg["name"], r.text)
+        data = r.json()
+        for j in _parse_sig_jobs(data, cfg["name"]):
+            jobs.setdefault(j.job_id, j)
+        if len(data.get("jobs", [])) < limit:  # short page -> last page
+            break
+    return list(jobs.values())
+
+
+# --------------------------------------------------------------------------- #
+# Adapter: Avature  (Two Sigma; server-rendered careers portal)
+#   Jobs are plain <a href="/careers/JobDetail/<slug>/<id>"> links in the HTML.
+#   Pagination is ?jobOffset=N (10 per page); an empty page ends the listing.
+# --------------------------------------------------------------------------- #
+_AVATURE_JOB = re.compile(r"/careers/JobDetail/[^\"'/]+/(\d+)")
+
+
+def _parse_avature_html(html: str, company: str, root: str) -> dict[str, Job]:
+    soup = BeautifulSoup(html, "html.parser")
+    page: dict[str, Job] = {}
+    for a in soup.find_all("a", href=True):
+        m = _AVATURE_JOB.search(a["href"])
+        if not m:
+            continue
+        txt = a.get_text(" ", strip=True)
+        if len(txt) < 3:                      # skip icon/empty anchors for the same job
+            continue
+        jid = m.group(1)
+        href = a["href"] if a["href"].startswith("http") else urljoin(root, a["href"])
+        cur = page.get(jid)
+        if cur is None or len(txt) > len(cur.title):   # keep the cleanest (longest) title
+            page[jid] = Job(company, jid, txt, url=href)
+    return page
+
+
+def fetch_avature(cfg: dict, debug: bool = False) -> list[Job]:
+    base = cfg["url"]
+    root = re.match(r"https?://[^/]+", base).group(0)
+    jobs: dict[str, Job] = {}
+    for offset in range(0, 600, 10):          # 10/page; safety cap at 60 pages
+        r = http_get(base, params={"jobOffset": offset})
+        if debug and offset == 0:
+            _dump_debug(cfg["name"], r.text)
+        before = len(jobs)
+        for jid, j in _parse_avature_html(r.text, cfg["name"], root).items():
+            jobs.setdefault(jid, j)
+        if len(jobs) == before:               # empty page or nothing new -> done
+            break
+    return list(jobs.values())
+
+
+# --------------------------------------------------------------------------- #
 # Filtering / helpers
 # --------------------------------------------------------------------------- #
 def _hash(s: str) -> str:
@@ -505,9 +621,11 @@ ADAPTERS = {
     "citadel_ajax": fetch_citadel_ajax,
     "playwright": fetch_playwright,
     "drw": fetch_drw,
+    "sig_api": fetch_sig,
+    "avature": fetch_avature,
 }
 # Adapters that accept a debug= kwarg (they can dump their raw/rendered response).
-_DEBUG_ADAPTERS = ("citadel_ajax", "playwright", "drw")
+_DEBUG_ADAPTERS = ("citadel_ajax", "playwright", "drw", "sig_api", "avature")
 
 
 def scrape_company(cfg: dict, debug: bool = False, mode: str | None = None) -> tuple[list[Job], list[Job]]:
@@ -569,7 +687,8 @@ def save_jobs(con: sqlite3.Connection, jobs: list[Job]) -> None:
 # --------------------------------------------------------------------------- #
 # Email
 # --------------------------------------------------------------------------- #
-def send_email(new_jobs: list[Job]) -> bool:
+def send_email(new_jobs: list[Job], kind: str = "new new-grad SWE",
+               intro: str = "New roles found:") -> bool:
     host = os.getenv("EMAIL_SMTP_HOST", "smtp.gmail.com")
     port = int(os.getenv("EMAIL_SMTP_PORT", "465"))
     user = os.getenv("EMAIL_USER")
@@ -586,7 +705,7 @@ def send_email(new_jobs: list[Job]) -> bool:
         by_company.setdefault(j.company, []).append(j)
 
     companies = ", ".join(sorted(by_company))
-    subject = f"[Jobs] {len(new_jobs)} new new-grad SWE role(s): {companies}"
+    subject = f"[Jobs] {len(new_jobs)} {kind} role(s): {companies}"
 
     text_lines, html_parts = [], ["<div style='font-family:-apple-system,Segoe UI,Arial,sans-serif'>"]
     for company in sorted(by_company):
@@ -606,7 +725,7 @@ def send_email(new_jobs: list[Job]) -> bool:
     msg["Subject"] = subject
     msg["From"] = user
     msg["To"] = to
-    msg.set_content("New roles found:\n" + "\n".join(text_lines))
+    msg.set_content(intro + "\n" + "\n".join(text_lines))
     msg.add_alternative("".join(html_parts), subtype="html")
 
     try:
@@ -618,7 +737,7 @@ def send_email(new_jobs: list[Job]) -> bool:
         with server:
             server.login(user, pw)
             server.send_message(msg)
-        log.info("Emailed %d new role(s) to %s", len(new_jobs), to)
+        log.info("Emailed %d %s role(s) to %s", len(new_jobs), kind, to)
         return True
     except Exception as e:  # noqa: BLE001
         log.error("Email send failed: %s", e)
@@ -727,6 +846,27 @@ def run_company(query: str, debug: bool = False) -> int:
         con.close()
 
 
+def email_db() -> int:
+    """Email every posting currently in the dedup store, without scraping anything.
+    A plain snapshot of what the watcher already knows; the store is left unchanged."""
+    con = db_connect()
+    rows = con.execute(
+        "SELECT company, job_id, title, location, department, url FROM seen "
+        "ORDER BY company, title"
+    ).fetchall()
+    con.close()
+
+    if not rows:
+        log.info("Store is empty — nothing to email. Run --once (or --company) first to populate it.")
+        return 0
+
+    jobs = [Job(company=r[0], job_id=r[1], title=r[2], location=r[3] or "",
+                department=r[4] or "", url=r[5] or "") for r in rows]
+    log.info("Emailing %d role(s) currently in the store...", len(jobs))
+    ok = send_email(jobs, kind="tracked", intro="All roles currently in the database:")
+    return 0 if ok else 1
+
+
 def run_loop(interval_min: int, debug: bool, notify_seed: bool) -> None:
     log.info("Watching %d companies every %d min. Ctrl+C to stop.", len(COMPANIES), interval_min)
     while True:
@@ -813,6 +953,37 @@ def selftest() -> int:
     ok &= _check("drw filter keeps new-grad SWE, drops senior + non-SWE",
                  [j.title for j in drw_kept] == ["Software Engineer - New Grad 2026"])
 
+    sig_payload = {"jobs": [
+        {"data": {"req_id": "11022", "slug": "11022",
+                  "title": "Software Developer Graduate: September 2026 London",
+                  "full_location": "London, United Kingdom",
+                  "categories": [{"name": "New Graduates"}]}},
+        {"data": {"req_id": "12000", "slug": "12000",
+                  "title": "Quantitative Researcher – PhD: 2027",
+                  "city": "New York", "state": "New York", "country": "United States",
+                  "categories": [{"name": "New Graduates"}]}},
+    ]}
+    sig = _parse_sig_jobs(sig_payload, "SIG")
+    ok &= _check("sig parses 2 new-grad postings", len(sig) == 2)
+    ok &= _check("sig builds careers.sig.com job URL",
+                 sig[0].url == "https://careers.sig.com/jobs/11022")
+    sig_kept = [j for j in sig if is_target_role(j, "scoped")]
+    ok &= _check("sig scoped keeps SWE dev, drops non-SWE researcher",
+                 [j.title for j in sig_kept] == ["Software Developer Graduate: September 2026 London"])
+
+    ts_html = (
+        '<a href="https://careers.twosigma.com/careers/JobDetail/NY-Software-Engineer-Campus/13001">'
+        'Software Engineer - Campus</a>'
+        '<a href="https://careers.twosigma.com/careers/JobDetail/NY-Software-Engineer-Campus/13001"><img/></a>'
+        '<a href="https://careers.twosigma.com/careers/JobDetail/NY-Business-Manager-Strategy/13002">'
+        'Business Manager - Strategy</a>'
+        '<a href="/careers/OpenRoles">All roles</a>')
+    av = _parse_avature_html(ts_html, "Two Sigma", "https://careers.twosigma.com")
+    ok &= _check("avature parses 2 distinct jobs (nav/icon ignored)", len(av) == 2)
+    av_kept = [j for j in av.values() if is_target_role(j, "filter")]
+    ok &= _check("avature filter keeps campus SWE, drops business manager",
+                 [j.title for j in av_kept] == ["Software Engineer - Campus"])
+
     print("\nSELF-TEST:", "ALL PASSED ✅" if ok else "FAILURES ❌")
     return 0 if ok else 1
 
@@ -834,6 +1005,8 @@ def main() -> int:
     ap.add_argument("--company", metavar="NAME",
                     help="Scrape ONE company once (e.g. --company DRW), email any NEW roles, "
                          "then exit. No email is sent if nothing is new.")
+    ap.add_argument("--email-db", action="store_true",
+                    help="Email every posting already in the store (no scraping), then exit.")
     ap.add_argument("--debug", action="store_true", help="Dump rendered HTML for JS/AJAX sites.")
     ap.add_argument("--notify-seed", action="store_true", help="Email even on the first (seeding) run.")
     ap.add_argument("--selftest", action="store_true", help="Run offline parser tests and exit.")
@@ -848,6 +1021,8 @@ def main() -> int:
         return 0
     if args.company:
         return run_company(args.company, debug=args.debug)
+    if args.email_db:
+        return email_db()
 
     if args.once:
         run_once(debug=args.debug, notify_seed=args.notify_seed)

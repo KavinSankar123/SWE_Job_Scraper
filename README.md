@@ -31,6 +31,7 @@ python job_watcher.py --list          # show what will be monitored
 python job_watcher.py --once          # single pass (first pass just seeds, no email)
 python job_watcher.py --interval 120  # loop forever, checking every 120 minutes
 python job_watcher.py --company DRW    # scrape ONE firm now for SWE roles (see below)
+python job_watcher.py --email-db      # email everything already stored (no scraping)
 ```
 
 The **first run seeds silently** so you don't get flooded. From then on you're
@@ -94,12 +95,16 @@ crontab -e
 Tip: if you use the internal `--interval` loop on a laptop, wrap it with
 `caffeinate -s python job_watcher.py --interval 120` so sleep doesn't pause it.
 
-## The JavaScript sites (Citadel, Citadel Securities)
+## How each firm is reached
 
-Radix, HRT, D.E. Shaw, and DRW are reached through clean data feeds and work out of
-the box — DRW's full listing ships inside the page's Next.js `__NEXT_DATA__` blob, so
-no browser is needed. Citadel/Citadel Securities render jobs through a WordPress
-`admin-ajax.php` call. If `--list`-style run logs show `Citadel scraped 0 roles`, do this:
+Most firms expose a clean data feed and work out of the box:
+- **Greenhouse JSON API** — Radix, Hudson River Trading, Five Rings, Jump Trading, Flow Traders
+- **Custom JSON / embedded data** — D.E. Shaw (server HTML), DRW (Next.js `__NEXT_DATA__`),
+  SIG (`careers.sig.com/api/jobs`, pre-filtered to New Graduates)
+- **Avature HTML** — Two Sigma (server-rendered `JobDetail` links, paginated via `?jobOffset=`)
+- **WordPress `admin-ajax.php`** — Citadel, Citadel Securities (the only JS-rendered ones)
+
+If `--list`-style run logs show `Citadel scraped 0 roles`, do this:
 
 ```bash
 python job_watcher.py --once --debug     # writes debug_citadel.html etc.

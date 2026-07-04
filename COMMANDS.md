@@ -51,8 +51,9 @@ Emails only postings you haven't seen before; sends nothing if there's nothing n
 ```
 
 Firm names: `Radix Trading`, `Hudson River Trading`, `D.E. Shaw`, `Citadel`,
-`Citadel Securities`, `DRW`. The first run for a firm emails everything currently
-open there, then only new postings after that.
+`Citadel Securities`, `DRW`, `Five Rings`, `Jump Trading`, `Flow Traders`, `SIG`,
+`Two Sigma`. The first run for a firm emails everything currently open there, then
+only new postings after that.
 
 ---
 
@@ -144,6 +145,9 @@ chmod 700 run.sh
 The file `seen_jobs.sqlite3` remembers what you've already been emailed.
 
 ```bash
+# Email a snapshot of EVERYTHING currently in the store (no scraping, store unchanged)
+./run.sh --email-db
+
 # How many roles are tracked
 sqlite3 seen_jobs.sqlite3 "SELECT COUNT(*) FROM seen;"
 
@@ -215,4 +219,10 @@ launchctl unload ~/Library/LaunchAgents/com.kavin.jobwatcher.plist   # stop
 
 ```
 0 */2 * * * /Users/kavinsankar/Downloads/HFT_Job_Scraper/run.sh --once >> /Users/kavinsankar/Downloads/HFT_Job_Scraper/cron.log 2>&1
+```
+
+
+**Remove all saved jobs in the database and email a fresh list of postings**
+```bash
+rm -f seen_jobs.sqlite3 && ./run.sh --once --notify-seed
 ```
