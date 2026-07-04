@@ -1,0 +1,18 @@
+# Secrets — the private launcher holds your Gmail App Password
+run.sh
+
+# Local tooling / editor
+.claude/
+.DS_Store
+
+# Python virtual environment
+.venv/
+__pycache__/
+*.pyc
+
+# Runtime state, logs, and debug dumps
+seen_jobs.sqlite3
+*.log
+cron.log
+launchd.*.log
+debug_*.html

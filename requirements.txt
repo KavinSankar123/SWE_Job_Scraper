@@ -1,0 +1,7 @@
+requests>=2.31
+beautifulsoup4>=4.12
+
+# Optional — only a fallback for Citadel/Citadel Securities if their AJAX endpoint
+# ever changes (DRW works without it). After installing, download the browser:
+#     pip install playwright
+#     playwright install chromium
