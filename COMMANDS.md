@@ -166,7 +166,7 @@ rm -f seen_jobs.sqlite3
 ./run.sh --once --debug      # dumps debug_<company>.html for the JS/AJAX sites
 ```
 
-All six firms work out of the box (DRW included — it no longer needs a browser).
+Every firm works out of the box (DRW included — it no longer needs a browser).
 Playwright is only a fallback for Citadel/Citadel Securities if their AJAX endpoint
 ever changes — optional, ~150 MB:
 
