@@ -38,6 +38,7 @@ import smtplib
 import sqlite3
 import sys
 import time
+import unicodedata
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from email.message import EmailMessage
@@ -246,6 +247,20 @@ COMPANIES = [
         "wd_site": "Campus_Careers",
         "newgrad_mode": "scoped",
     },
+
+    # ---- More quant/HFT Greenhouse boards (all general boards -> filter) --- #
+    {"name": "Qube Research (QRT)", "adapter": "greenhouse", "board_token": "quberesearchandtechnologies", "newgrad_mode": "filter"},
+    {"name": "IMC Trading",         "adapter": "greenhouse", "board_token": "imc",                      "newgrad_mode": "filter"},
+    {"name": "WorldQuant",          "adapter": "greenhouse", "board_token": "worldquant",               "newgrad_mode": "filter"},
+    {"name": "Squarepoint Capital", "adapter": "greenhouse", "board_token": "squarepointcapital",       "newgrad_mode": "filter"},
+    {"name": "DV Trading",          "adapter": "greenhouse", "board_token": "dvtrading",                "newgrad_mode": "filter"},
+    {"name": "Schonfeld",           "adapter": "greenhouse", "board_token": "schonfeld",                "newgrad_mode": "filter"},
+    {"name": "AQR Capital",         "adapter": "greenhouse", "board_token": "aqr",                      "newgrad_mode": "filter"},
+    {"name": "Virtu Financial",     "adapter": "greenhouse", "board_token": "virtu",                    "newgrad_mode": "filter"},
+    {"name": "Old Mission Capital", "adapter": "greenhouse", "board_token": "oldmissioncapital",        "newgrad_mode": "filter"},
+    {"name": "PDT Partners",        "adapter": "greenhouse", "board_token": "pdtpartners",              "newgrad_mode": "filter"},
+    {"name": "Vatic Labs",          "adapter": "greenhouse", "board_token": "vaticlabs",                "newgrad_mode": "filter"},
+    {"name": "Aquatic Capital",     "adapter": "greenhouse", "board_token": "aquaticcapitalmanagement", "newgrad_mode": "filter"},
 ]
 
 
@@ -609,7 +624,16 @@ def fetch_sig(cfg: dict, debug: bool = False) -> list[Job]:
 #   Jobs are plain <a href="/careers/JobDetail/<slug>/<id>"> links in the HTML.
 #   Pagination is ?jobOffset=N (10 per page); an empty page ends the listing.
 # --------------------------------------------------------------------------- #
-_AVATURE_JOB = re.compile(r"/careers/JobDetail/[^\"'/]+/(\d+)")
+_AVATURE_JOB = re.compile(r"/careers/JobDetail/([^\"'/]+)/(\d+)")
+
+
+def _avature_location(slug: str, title: str) -> str:
+    """Avature slugs are '<location>-<title>' — strip the (known) title off the
+    end to recover the location prefix, e.g. 'New-York-New-York-United-States'."""
+    title_slug = re.sub(r"[^a-z0-9]+", "-", title.lower()).strip("-")
+    if title_slug and slug.lower().endswith(title_slug):
+        return slug[: len(slug) - len(title_slug)].strip("-").replace("-", " ")
+    return ""
 
 
 def _parse_avature_html(html: str, company: str, root: str) -> dict[str, Job]:
@@ -622,11 +646,11 @@ def _parse_avature_html(html: str, company: str, root: str) -> dict[str, Job]:
         txt = a.get_text(" ", strip=True)
         if len(txt) < 3:                      # skip icon/empty anchors for the same job
             continue
-        jid = m.group(1)
+        slug, jid = m.group(1), m.group(2)
         href = a["href"] if a["href"].startswith("http") else urljoin(root, a["href"])
         cur = page.get(jid)
         if cur is None or len(txt) > len(cur.title):   # keep the cleanest (longest) title
-            page[jid] = Job(company, jid, txt, url=href)
+            page[jid] = Job(company, jid, txt, location=_avature_location(slug, txt), url=href)
     return page
 
 
@@ -706,6 +730,113 @@ def is_target_role(job: Job, mode: str) -> bool:
     return True  # "scoped" / "all_swe"
 
 
+# --------------------------------------------------------------------------- #
+# Location filter — only notify about roles in the United States
+#   Rules: no location -> send; any US location -> send; only-foreign -> ignore.
+#   Cities are checked directly (many postings list a city with no country), and
+#   anything we can't place is treated as "maybe US" and sent — we only drop what
+#   is *recognizably* outside the US.
+# --------------------------------------------------------------------------- #
+US_ONLY = True  # set False to notify regardless of location
+
+_US_STATE_ABBR = {
+    "AL", "AK", "AZ", "AR", "CA", "CO", "CT", "DE", "FL", "GA", "HI", "ID", "IL",
+    "IN", "IA", "KS", "KY", "LA", "ME", "MD", "MA", "MI", "MN", "MS", "MO", "MT",
+    "NE", "NV", "NH", "NJ", "NM", "NY", "NC", "ND", "OH", "OK", "OR", "PA", "RI",
+    "SC", "SD", "TN", "TX", "UT", "VT", "VA", "WA", "WV", "WI", "WY", "DC", "PR",
+}
+_US_STATES = {
+    "alabama", "alaska", "arizona", "arkansas", "california", "colorado",
+    "connecticut", "delaware", "florida", "georgia", "hawaii", "idaho", "illinois",
+    "indiana", "iowa", "kansas", "kentucky", "louisiana", "maine", "maryland",
+    "massachusetts", "michigan", "minnesota", "mississippi", "missouri", "montana",
+    "nebraska", "nevada", "new hampshire", "new jersey", "new mexico", "new york",
+    "north carolina", "north dakota", "ohio", "oklahoma", "oregon", "pennsylvania",
+    "rhode island", "south carolina", "south dakota", "tennessee", "texas", "utah",
+    "vermont", "virginia", "washington", "west virginia", "wisconsin", "wyoming",
+    "district of columbia", "puerto rico",
+}
+_US_CITIES = {
+    "new york", "chicago", "boston", "houston", "miami", "greenwich", "old greenwich",
+    "stamford", "austin", "dallas", "san francisco", "seattle", "los angeles",
+    "san jose", "palo alto", "mountain view", "sunnyvale", "jersey city",
+    "philadelphia", "bala cynwyd", "princeton", "boulder", "denver", "washington",
+    "atlanta", "charlotte", "minneapolis", "west palm beach", "chapel hill",
+    "durham", "raleigh", "edison", "san diego", "phoenix", "pittsburgh", "st louis",
+    "st. louis", "salt lake city", "nashville", "new jersey",
+}
+_FOREIGN = {
+    # countries / regions
+    "united kingdom", "england", "scotland", "wales", "northern ireland", "ireland",
+    "singapore", "india", "australia", "new zealand", "netherlands", "switzerland",
+    "germany", "france", "italy", "spain", "portugal", "sweden", "norway", "denmark",
+    "finland", "poland", "czech", "czechia", "austria", "belgium", "luxembourg",
+    "hungary", "greece", "romania", "bulgaria", "canada", "japan", "china", "taiwan",
+    "hong kong", "south korea", "korea", "israel", "united arab emirates", "emirates",
+    "qatar", "saudi arabia", "brazil", "mexico", "argentina", "chile", "colombia",
+    "uruguay", "turkey", "russia", "ukraine", "armenia", "vietnam", "thailand",
+    "indonesia", "malaysia", "philippines", "south africa", "egypt", "nigeria",
+    # cities
+    "london", "amsterdam", "montreal", "sydney", "melbourne", "warsaw", "krakow",
+    "zug", "zurich", "geneva", "lausanne", "mumbai", "bengaluru", "bangalore",
+    "hyderabad", "chennai", "pune", "new delhi", "delhi", "noida", "gurugram",
+    "gurgaon", "budapest", "paris", "dublin", "dubai", "abu dhabi", "doha", "riyadh",
+    "madrid", "barcelona", "shanghai", "beijing", "shenzhen", "guangzhou",
+    "hangzhou", "yerevan", "montevideo", "aarhus", "copenhagen", "seoul", "tel aviv",
+    "herzliya", "ramat gan", "hanoi", "ho chi minh", "taipei", "tokyo", "osaka",
+    "toronto", "vancouver", "calgary", "frankfurt", "munich", "berlin", "hamburg",
+    "milan", "rome", "stockholm", "gothenburg", "oslo", "helsinki", "lisbon",
+    "porto", "prague", "vienna", "brussels", "bristol", "oxford", "edinburgh",
+    "glasgow", "manchester", "leeds", "kuala lumpur", "jakarta", "manila",
+    "auckland", "wellington", "cape town", "johannesburg", "sao paulo",
+    "rio de janeiro", "mexico city", "buenos aires", "santiago", "bogota", "istanbul",
+}
+_FOREIGN_EXACT = {"uk", "uae"}
+
+
+def _strip_accents(s: str) -> str:
+    return "".join(c for c in unicodedata.normalize("NFKD", s) if not unicodedata.combining(c))
+
+
+def _split_locations(location: str) -> list[str]:
+    # Split on ; , / | newline and the word "or" (as a spaced conjunction, so a
+    # trailing state abbrev like "Portland, OR" is NOT treated as a separator).
+    parts = re.split(r"[;,/|\n]|\s+or\s+", location or "", flags=re.I)
+    return [p.strip() for p in parts if p and p.strip()]
+
+
+def _classify_location(part: str) -> str:
+    low = _strip_accents(part.strip().lower())
+    token = re.sub(r"[^a-z0-9]", "", low)
+    up = re.sub(r"[^A-Za-z]", "", part).upper()
+    # --- United States ---
+    if "united states" in low or token in {"us", "usa"}:
+        return "US"
+    if len(up) == 2 and up in _US_STATE_ABBR:
+        return "US"
+    if any(s in low for s in _US_STATES):
+        return "US"
+    if any(c in low for c in _US_CITIES):
+        return "US"
+    # --- recognisably foreign ---
+    if token in _FOREIGN_EXACT or any(f in low for f in _FOREIGN):
+        return "FOREIGN"
+    return "UNKNOWN"
+
+
+def location_in_scope(location: str) -> bool:
+    """True if the posting should be emailed under the US-only rule."""
+    if not US_ONLY:
+        return True
+    parts = _split_locations(location)
+    if not parts:
+        return True                              # no location -> send
+    classes = [_classify_location(p) for p in parts]
+    if "US" in classes or "UNKNOWN" in classes:  # any US, or a city we can't place
+        return True
+    return False                                 # every listed location is foreign
+
+
 ADAPTERS = {
     "greenhouse": fetch_greenhouse,
     "deshaw": fetch_deshaw,
@@ -725,7 +856,8 @@ def scrape_company(cfg: dict, debug: bool = False, mode: str | None = None) -> t
     `mode` overrides the company's configured newgrad_mode when provided."""
     fn = ADAPTERS[cfg["adapter"]]
     raw = fn(cfg, debug=debug) if cfg["adapter"] in _DEBUG_ADAPTERS else fn(cfg)
-    kept = [j for j in raw if is_target_role(j, mode or cfg.get("newgrad_mode", "filter"))]
+    use_mode = mode or cfg.get("newgrad_mode", "filter")
+    kept = [j for j in raw if is_target_role(j, use_mode) and location_in_scope(j.location)]
     return raw, kept
 
 
@@ -1091,6 +1223,31 @@ def selftest() -> int:
     wd_kept = [j for j in wd if is_target_role(j, "scoped")]
     ok &= _check("workday scoped keeps SWE, drops researcher",
                  [j.title for j in wd_kept] == ["Software Engineer, Campus"])
+
+    # ---- US location filter (cases taken from real board data) ------------- #
+    us_send = ["", "New York", "Chicago", "Chicago, United States",
+               "New York, NY, United States", "Greenwich, CT", "Austin, TX", "Boston",
+               "Bala Cynwyd (Philadelphia Area), Pennsylvania", "United States", "Remote",
+               "London, New York", "New York, London", "Chicago, New York, Amsterdam",
+               "London, United Kingdom; New York, NY, United States", "NY or Stamford",
+               "Chicago or New York",
+               "Austin OR Chicago OR Miami OR New York OR Old Greenwich OR San Francisco"]
+    us_drop = ["London", "Singapore", "Hong Kong", "Bengaluru, India", "Sydney,  Australia",
+               "Zug, Switzerland", "London, United Kingdom", "Amsterdam, Netherlands",
+               "Montréal", "Yerevan", "Montevideo", "Aarhus, Central Denmark Region, Denmark",
+               "Hanoi OR Ho Chi Minh City", "Beijing OR Shanghai", "London, UK",
+               "London, Montreal, Singapore", "Hong Kong, Hong Kong; Sydney,  Australia"]
+    bad_send = [x for x in us_send if not location_in_scope(x)]
+    bad_drop = [x for x in us_drop if location_in_scope(x)]
+    ok &= _check(f"US filter sends US/no-loc/mixed/unknown (offenders: {bad_send})", not bad_send)
+    ok &= _check(f"US filter drops all-foreign postings (offenders: {bad_drop})", not bad_drop)
+    ok &= _check("avature recovers US location from slug",
+                 _avature_location("New-York-New-York-United-States-AI-Research-Scientist-Campus-Full-Time",
+                                   "AI Research Scientist - Campus Full-Time")
+                 == "New York New York United States")
+    ok &= _check("avature recovers foreign location from slug",
+                 _avature_location("London-United-Kingdom-of-Great-Britain-and-Northern-Ireland-Client-Services-Associate",
+                                   "Client Services Associate").startswith("London United Kingdom"))
 
     print("\nSELF-TEST:", "ALL PASSED ✅" if ok else "FAILURES ❌")
     return 0 if ok else 1

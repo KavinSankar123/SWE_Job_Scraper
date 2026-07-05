@@ -1,7 +1,8 @@
 # Quant/HFT New-Grad Job Watcher
 
 Checks a set of quant/HFT career pages on a schedule and emails you when a **new**
-new-grad software role appears. Only alerts once per posting (SQLite dedup store).
+US-based new-grad software role appears. Only alerts once per posting (SQLite dedup
+store). Location filtering is US-only by default (toggle with `US_ONLY`).
 
 ## 1. Install
 
@@ -98,8 +99,10 @@ Tip: if you use the internal `--interval` loop on a laptop, wrap it with
 ## How each firm is reached
 
 Most firms expose a clean data feed and work out of the box:
-- **Greenhouse JSON API** — Radix, Hudson River Trading, Five Rings, Jump Trading, Flow
-  Traders, Tower Research, Blackedge, Walleye (students board), Akuna, Point72
+- **Greenhouse JSON API** — the majority: Radix, Hudson River Trading, Five Rings, Jump
+  Trading, Flow Traders, Tower Research, Blackedge, Walleye (students board), Akuna,
+  Point72, QRT/Qube, IMC, WorldQuant, Squarepoint, DV Trading, Schonfeld, AQR, Virtu,
+  Old Mission, PDT Partners, Vatic Labs, Aquatic
 - **Workday CXS JSON API** — Arrowstreet Capital (`Campus_Careers` site)
 - **Custom JSON / embedded data** — D.E. Shaw (server HTML), DRW (Next.js `__NEXT_DATA__`),
   SIG (`careers.sig.com/api/jobs`, pre-filtered to New Graduates)
@@ -128,6 +131,11 @@ Everything lives at the top of `job_watcher.py`:
 - `INTERN_TERMS` + `EXCLUDE_INTERN` — interns are dropped by default; flip to include.
 - `COMPANIES[].newgrad_mode` — `scoped` (source already new-grad), `filter`
   (require a new-grad hint), or `all_swe` (all software roles; firm doesn't label level).
+- `US_ONLY` — `True` by default, so you're only alerted about US roles. A posting is
+  kept if it has **no** location **or** lists **at least one** US location (city, state,
+  or "United States"); it's dropped **only** when *every* listed location is recognisably
+  outside the US. Set `US_ONLY = False` to alert regardless of location. If a city is
+  mis-placed, add it to the `_US_CITIES` / `_FOREIGN` sets just below.
 
 ## Add another company
 

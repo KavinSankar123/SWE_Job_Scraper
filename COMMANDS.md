@@ -50,11 +50,10 @@ Emails only postings you haven't seen before; sends nothing if there's nothing n
 ./run.sh --company DRW --debug            # also dump the raw page for troubleshooting
 ```
 
-Firm names: `Radix Trading`, `Hudson River Trading`, `D.E. Shaw`, `Citadel`,
-`Citadel Securities`, `DRW`, `Five Rings`, `Jump Trading`, `Flow Traders`, `SIG`,
-`Two Sigma`, `Tower Research`, `Blackedge Capital`, `Walleye Capital`, `Akuna Capital`,
-`Point72`, `Arrowstreet Capital`. The first run for a firm emails everything currently
-open there, then only new postings after that.
+Run `./run.sh --list` for the full roster (29 firms). Names match
+case/space/punctuation-insensitively — e.g. `imc`, `aqr`, `two sigma`, `deshaw`,
+`qube`. The first run for a firm emails everything currently open there, then only
+new postings after that.
 
 ---
 
