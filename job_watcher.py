@@ -111,6 +111,23 @@ class Job:
         return f"{self.company}::{self.job_id}"
 
 
+@dataclass
+class Event:
+    """A recruiting event — info session, networking night, trading challenge, tech
+    talk, women-in-trading day, etc. Parallel to Job; `register_url` is the direct
+    link Kavin clicks to sign up (the whole point of the events feature)."""
+    company: str
+    event_id: str
+    title: str
+    register_url: str = ""
+    location: str = ""
+    department: str = ""
+
+    @property
+    def key(self) -> str:
+        return f"{self.company}::{self.event_id}"
+
+
 # --------------------------------------------------------------------------- #
 # Company configuration
 #   newgrad_mode:
@@ -875,6 +892,207 @@ def collect_all(debug: bool = False) -> list[Job]:
 
 
 # --------------------------------------------------------------------------- #
+# EVENTS  (Phase 1: detect events on the Greenhouse boards we already scrape)
+#   Greenhouse has no "events page" — events are mixed into the normal job board,
+#   so an event is *detected* by its title: it must carry an event signal AND not
+#   read as an ordinary job role. Per Kavin's rule there is NO further filtering
+#   (no US-only, no upcoming-only): every detected event is emailed. Dropping a
+#   recruiter role like "Events Officer" is classification, not event-filtering.
+#   Phase 2 will add firm events-page adapters, where every entry is already an event.
+# --------------------------------------------------------------------------- #
+EVENT_TERMS = [
+    "event", "networking", "network night", "challenge", "competition",
+    "datathon", "hackathon", "estimathon", "trading combine", "combine",
+    "insight", "open house", "info session", "information session", "tech talk",
+    "meetup", "symposium", "conference", "connect with us", "join us", "webinar",
+    "workshop", "fellowship", "talent network", "summit", "immersion",
+    "discovery day", "puzzle", "trivia", "women's", "womens", "women in",
+]
+# A title carrying one of these is an ordinary JOB (a recruiter/eng role), not an
+# event — drop it. This removes non-events; it does not filter which events to send.
+EVENT_EXCLUDE = [
+    "engineer", "developer", "coordinator", "specialist", "manager", "lead",
+    "analyst", "director", "president", "recruiter", "head of", "counsel",
+    "administrator", "controller", "officer",
+]
+
+
+def is_event(title: str) -> bool:
+    t = title.lower()
+    return any(term in t for term in EVENT_TERMS) and not any(x in t for x in EVENT_EXCLUDE)
+
+
+def job_to_event(j: Job) -> Event:
+    return Event(company=j.company, event_id=j.job_id, title=j.title,
+                 register_url=j.url, location=j.location, department=j.department)
+
+
+def _parse_greenhouse_jobs_flat(data: dict, company: str) -> list[Job]:
+    """Parse Greenhouse's FLAT /jobs endpoint. Unlike /departments (used by the jobs
+    adapter) this includes postings with NO department — which is exactly how firms
+    post events (e.g. IMC's 'Aarhus Networking event', Point72's talent networks),
+    so they aren't silently dropped. /jobs carries no department, so it's left blank."""
+    jobs: dict[str, Job] = {}
+    for j in data.get("jobs", []):
+        jid = str(j.get("id") or "").strip()
+        if not jid or jid in jobs:
+            continue
+        loc = j["location"].get("name", "") if isinstance(j.get("location"), dict) else ""
+        jobs[jid] = Job(company=company, job_id=jid,
+                        title=(j.get("title") or "").strip(),
+                        location=(loc or "").strip(),
+                        url=(j.get("absolute_url") or "").strip())
+    return list(jobs.values())
+
+
+def fetch_greenhouse_events(cfg: dict) -> list[Event]:
+    """Detect events on a Greenhouse board via the flat /jobs endpoint (so
+    department-less event postings aren't missed). No location/date filtering —
+    every detected event is returned."""
+    url = f"https://boards-api.greenhouse.io/v1/boards/{cfg['board_token']}/jobs"
+    jobs = _parse_greenhouse_jobs_flat(http_get(url).json(), cfg["name"])
+    return [job_to_event(j) for j in jobs if is_event(j.title)]
+
+
+# --------------------------------------------------------------------------- #
+# EVENT ADAPTER: Jane Street  (Phase 2 — server-rendered /programs-and-events/)
+#   Each program/event is <a href="/join-jane-street/programs-and-events/<slug>/">
+#   wrapping .program-label (PROGRAM|EVENT), .program-title, a status label, and a
+#   description. Everything on this page is an event/program, so all are kept.
+# --------------------------------------------------------------------------- #
+_JS_EVENTS_URL = "https://www.janestreet.com/join-jane-street/programs-and-events/"
+_JS_EVENTS_BASE = "https://www.janestreet.com"
+
+
+def _parse_janestreet_events(html: str, company: str, base: str = _JS_EVENTS_BASE) -> list[Event]:
+    soup = BeautifulSoup(html, "html.parser")
+    events: dict[str, Event] = {}
+    for a in soup.find_all("a", href=True):
+        href = a["href"]
+        if "/programs-and-events/" not in href:
+            continue
+        slug = href.rstrip("/").split("/")[-1]
+        if slug in ("programs-and-events", ""):
+            continue                       # the listing / nav link itself
+        title_el = a.select_one(".program-title")
+        if title_el is None:
+            continue                       # a nav/text link, not an event card
+        label_el = a.select_one(".program-label")
+        title = title_el.get_text(" ", strip=True)
+        label = label_el.get_text(" ", strip=True) if label_el else ""
+        full_title = f"{label.title()}: {title}" if label else title
+        url = href if href.startswith("http") else base + href
+        events.setdefault(slug, Event(company=company, event_id=slug,
+                                      title=full_title, register_url=url))
+    return list(events.values())
+
+
+def fetch_janestreet_events(cfg: dict) -> list[Event]:
+    r = http_get(cfg.get("url", _JS_EVENTS_URL))
+    return _parse_janestreet_events(r.text, cfg["name"])
+
+
+# --------------------------------------------------------------------------- #
+# EVENT ADAPTER: generic headless render  (Phase 2 — JS-rendered firm event pages)
+#   Firms whose events page is client-side rendered (HRT, Citadel, Two Sigma) can't
+#   be read with a plain GET. This mirrors the jobs-side Playwright fallback: render
+#   the page, then scrape anchors matching the firm's event-link pattern. Requires
+#   the optional Playwright install; without it, returns [] with a warning (the run
+#   simply skips that firm). Each firm's link_regex may need a --debug tune.
+# --------------------------------------------------------------------------- #
+def fetch_playwright_events(cfg: dict, debug: bool = False) -> list[Event]:
+    try:
+        from playwright.sync_api import sync_playwright
+    except ImportError:
+        log.warning("%s: Playwright not installed — skipping events. Enable with:\n"
+                    "    pip install playwright && playwright install chromium", cfg["name"])
+        return []
+
+    url = cfg["url"]
+    link_regex = re.compile(cfg.get("link_regex", r"event"), re.I)
+    wait_selector = cfg.get("wait_selector")
+    html = ""
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        try:
+            page = browser.new_page(user_agent=UA)
+            page.goto(url, wait_until="networkidle", timeout=45000)
+            if wait_selector:
+                try:
+                    page.wait_for_selector(wait_selector, timeout=10000)
+                except Exception:  # noqa: BLE001
+                    pass
+            else:
+                page.wait_for_timeout(4000)
+            html = page.content()
+        finally:
+            browser.close()
+    if debug:
+        _dump_debug(cfg["name"], html)
+
+    root = re.match(r"https?://[^/]+", url).group(0)
+    soup = BeautifulSoup(html, "html.parser")
+    events: dict[str, Event] = {}
+    for a in soup.find_all("a", href=True):
+        if not link_regex.search(a["href"]):
+            continue
+        title = a.get_text(" ", strip=True)
+        if len(title) < 3:
+            continue
+        full = a["href"] if a["href"].startswith("http") else urljoin(root, a["href"])
+        events.setdefault(full, Event(cfg["name"], _hash(full), title, register_url=full))
+    return list(events.values())
+
+
+# adapter name -> event fetcher.
+EVENT_ADAPTERS = {
+    "greenhouse": fetch_greenhouse_events,           # Phase 1: boards we already scrape
+    "janestreet_events": fetch_janestreet_events,    # Phase 2: server-rendered page
+    "playwright_events": fetch_playwright_events,     # Phase 2: JS-rendered pages (opt-in)
+}
+# Event adapters that accept a debug= kwarg (they can dump their rendered response).
+_DEBUG_EVENT_ADAPTERS = ("playwright_events",)
+
+# Dedicated event-only sources (firm events pages), separate from the jobs COMPANIES
+# list. Greenhouse events come from COMPANIES (Phase 1); these are the Phase 2 pages.
+EVENT_SOURCES = [
+    {
+        "name": "Jane Street",
+        "adapter": "janestreet_events",
+        "url": _JS_EVENTS_URL,
+    },
+    # --- JS-rendered firm pages: require the optional Playwright install --------
+    # Wired and ready; they activate once Playwright is installed. link_regex is a
+    # best guess — if a firm returns 0 (or noise), run --list-events after installing
+    # Playwright, open debug_<firm>.html, find the event-card anchors, and adjust it.
+    {
+        "name": "Hudson River Trading",
+        "adapter": "playwright_events",
+        "url": "https://www.hudsonrivertrading.com/careers/",
+        "link_regex": r"/event|/campus|networking|women-in",
+    },
+]
+
+
+def collect_events(debug: bool = False) -> list[Event]:
+    found: list[Event] = []
+    # Greenhouse boards we already track (Phase 1) + dedicated event pages (Phase 2).
+    for cfg in list(COMPANIES) + EVENT_SOURCES:
+        fn = EVENT_ADAPTERS.get(cfg["adapter"])
+        if fn is None:
+            continue  # this source has no event adapter wired up
+        try:
+            evs = fn(cfg, debug=debug) if cfg["adapter"] in _DEBUG_EVENT_ADAPTERS else fn(cfg)
+        except Exception as e:  # noqa: BLE001
+            log.error("%s: event adapter error: %s", cfg["name"], e)
+            continue
+        if evs:
+            log.info("%-22s %2d event(s)", cfg["name"], len(evs))
+        found.extend(evs)
+    return found
+
+
+# --------------------------------------------------------------------------- #
 # Storage (SQLite)
 # --------------------------------------------------------------------------- #
 def db_connect() -> sqlite3.Connection:
@@ -891,6 +1109,18 @@ def db_connect() -> sqlite3.Connection:
                first_seen TEXT
            )"""
     )
+    con.execute(
+        """CREATE TABLE IF NOT EXISTS seen_events (
+               key          TEXT PRIMARY KEY,
+               company      TEXT,
+               event_id     TEXT,
+               title        TEXT,
+               location     TEXT,
+               department   TEXT,
+               register_url TEXT,
+               first_seen   TEXT
+           )"""
+    )
     con.commit()
     return con
 
@@ -904,6 +1134,20 @@ def save_jobs(con: sqlite3.Connection, jobs: list[Job]) -> None:
     con.executemany(
         "INSERT OR IGNORE INTO seen VALUES (?,?,?,?,?,?,?,?)",
         [(j.key, j.company, j.job_id, j.title, j.location, j.department, j.url, now) for j in jobs],
+    )
+    con.commit()
+
+
+def load_seen_event_keys(con: sqlite3.Connection) -> set[str]:
+    return {row[0] for row in con.execute("SELECT key FROM seen_events")}
+
+
+def save_events(con: sqlite3.Connection, events: list[Event]) -> None:
+    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    con.executemany(
+        "INSERT OR IGNORE INTO seen_events VALUES (?,?,?,?,?,?,?,?)",
+        [(e.key, e.company, e.event_id, e.title, e.location, e.department, e.register_url, now)
+         for e in events],
     )
     con.commit()
 
@@ -970,6 +1214,64 @@ def send_email(new_jobs: list[Job], kind: str = "new new-grad SWE",
 
 def _esc(s: str) -> str:
     return (s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;"))
+
+
+def send_event_email(new_events: list[Event]) -> bool:
+    """Email newly-detected events with the register link as the headline. Mirrors
+    send_email's structure with event wording; the jobs email path is untouched."""
+    host = os.getenv("EMAIL_SMTP_HOST", "smtp.gmail.com")
+    port = int(os.getenv("EMAIL_SMTP_PORT", "465"))
+    user = os.getenv("EMAIL_USER")
+    pw = os.getenv("EMAIL_APP_PASSWORD")
+    to = os.getenv("EMAIL_TO", user or "")
+
+    if not (user and pw and to):
+        log.error("Email not sent — set EMAIL_USER, EMAIL_APP_PASSWORD, EMAIL_TO "
+                  "(Gmail needs an App Password, not your login password).")
+        return False
+
+    by_company: dict[str, list[Event]] = {}
+    for e in new_events:
+        by_company.setdefault(e.company, []).append(e)
+
+    companies = ", ".join(sorted(by_company))
+    subject = f"[Events] {len(new_events)} event(s): {companies}"
+
+    text_lines, html_parts = [], ["<div style='font-family:-apple-system,Segoe UI,Arial,sans-serif'>"]
+    for company in sorted(by_company):
+        text_lines.append(f"\n{company}")
+        html_parts.append(f"<h3 style='margin:16px 0 4px'>{company}</h3><ul style='margin:0'>")
+        for e in by_company[company]:
+            loc = f" — {e.location}" if e.location else ""
+            text_lines.append(f"  • {e.title}{loc}\n    Register: {e.register_url}")
+            html_parts.append(
+                f"<li style='margin:6px 0'><a href='{e.register_url}'>{_esc(e.title)}</a>"
+                f"<span style='color:#666'>{_esc(loc)}</span></li>"
+            )
+        html_parts.append("</ul>")
+    html_parts.append("</div>")
+
+    msg = EmailMessage()
+    msg["Subject"] = subject
+    msg["From"] = user
+    msg["To"] = to
+    msg.set_content("New events — click to register:\n" + "\n".join(text_lines))
+    msg.add_alternative("".join(html_parts), subtype="html")
+
+    try:
+        if port == 465:
+            server = smtplib.SMTP_SSL(host, port, timeout=30)
+        else:
+            server = smtplib.SMTP(host, port, timeout=30)
+            server.starttls()
+        with server:
+            server.login(user, pw)
+            server.send_message(msg)
+        log.info("Emailed %d event(s) to %s", len(new_events), to)
+        return True
+    except Exception as e:  # noqa: BLE001
+        log.error("Event email send failed: %s", e)
+        return False
 
 
 # --------------------------------------------------------------------------- #
@@ -1103,6 +1405,79 @@ def run_loop(interval_min: int, debug: bool, notify_seed: bool) -> None:
         except KeyboardInterrupt:
             log.info("Stopped.")
             return
+
+
+# --------------------------------------------------------------------------- #
+# Events cycle
+# --------------------------------------------------------------------------- #
+def run_events_once(debug: bool = False) -> None:
+    """One events pass: detect, email anything new, then store it.
+
+    Unlike the jobs watcher there is NO silent first-run seeding — the event set is
+    tiny and time-sensitive, so the first pass emails everything currently open.
+    Events are saved only after the email sends, so a failed send retries next run."""
+    con = db_connect()
+    try:
+        seen = load_seen_event_keys(con)
+        current = collect_events(debug=debug)
+        uniq: dict[str, Event] = {}                # de-dup within this pass
+        for e in current:
+            uniq.setdefault(e.key, e)
+        current = list(uniq.values())
+
+        new_events = [e for e in current if e.key not in seen]
+        if not new_events:
+            log.info("No new events this pass (%d tracked).", len(current))
+            return
+
+        log.info("%d NEW event(s):", len(new_events))
+        for e in new_events:
+            log.info("   + [%s] %s — %s", e.company, e.title, e.register_url)
+
+        if send_event_email(new_events):
+            save_events(con, new_events)
+            log.info("Emailed and saved %d new event(s).", len(new_events))
+        else:
+            log.warning("Event email failed — NOT saving, so they'll retry next run.")
+    finally:
+        con.close()
+
+
+def run_events_loop(interval_min: int, debug: bool = False) -> None:
+    n = sum(1 for c in list(COMPANIES) + EVENT_SOURCES if c["adapter"] in EVENT_ADAPTERS)
+    log.info("Watching events at %d companies every %d min. Ctrl+C to stop.", n, interval_min)
+    while True:
+        try:
+            run_events_once(debug=debug)
+        except Exception as e:  # noqa: BLE001
+            log.error("Event cycle failed: %s", e)
+        try:
+            time.sleep(interval_min * 60)
+        except KeyboardInterrupt:
+            log.info("Stopped.")
+            return
+
+
+def list_events(debug: bool = False) -> int:
+    """Print the events currently detected on the boards (no email, store untouched)."""
+    current = collect_events(debug=debug)
+    uniq: dict[str, Event] = {}
+    for e in current:
+        uniq.setdefault(e.key, e)
+    events = sorted(uniq.values(), key=lambda e: (e.company, e.title))
+    if not events:
+        print("No events currently detected.")
+        return 0
+    print(f"Detected {len(events)} event(s):")
+    cur = None
+    for e in events:
+        if e.company != cur:
+            print(f"\n{e.company}")
+            cur = e.company
+        loc = f" — {e.location}" if e.location else ""
+        print(f"  • {e.title}{loc}")
+        print(f"      {e.register_url}")
+    return 0
 
 
 # --------------------------------------------------------------------------- #
@@ -1249,6 +1624,67 @@ def selftest() -> int:
                  _avature_location("London-United-Kingdom-of-Great-Britain-and-Northern-Ireland-Client-Services-Associate",
                                    "Client Services Associate").startswith("London United Kingdom"))
 
+    # ---- Event classifier (Phase 1: Greenhouse) — titles from real board data -- #
+    ok &= _check("event keeps 'Networking event'",
+                 is_event("Aarhus Networking event | IMC Trading") is True)
+    ok &= _check("event keeps 'Trading Challenge'",
+                 is_event("Akuna Capital's 2026 Virtual Quant Trading Challenge") is True)
+    ok &= _check("event keeps 'Connect with us at ...'",
+                 is_event("Connect with us at ICLR 2026!") is True)
+    ok &= _check("event keeps talent-network signup",
+                 is_event("WorldQuant Technology Talent Network") is True)
+    ok &= _check("event drops Network Engineer job",
+                 is_event("Senior Network Engineer - Low Latency Trading") is False)
+    ok &= _check("event drops Events Coordinator job",
+                 is_event("Events Coordinator (Temp)") is False)
+    ok &= _check("event drops Events Officer job (was the one false positive)",
+                 is_event("Academic Programmes & Events Officer") is False)
+    ok &= _check("event drops Events Specialist job",
+                 is_event("Global Marketing Events Specialist") is False)
+    ok &= _check("event drops 'University Events & Engagement Lead' job",
+                 is_event("University Events & Engagement Lead - APAC") is False)
+    ok &= _check("job_to_event carries the register link",
+                 job_to_event(Job("IMC", "123", "Networking event", url="https://x/y")).register_url
+                 == "https://x/y")
+
+    # Flat /jobs parse — the endpoint that surfaces department-less events that
+    # /departments omits (real IDs/titles from the IMC board).
+    gh_flat = {"jobs": [
+        {"id": 4787218101, "title": "Aarhus Networking event | IMC Trading",
+         "location": {"name": "Aarhus, Denmark"},
+         "absolute_url": "https://job-boards.eu.greenhouse.io/imc/jobs/4787218101"},
+        {"id": 999, "title": "Senior Network Engineer",
+         "location": {"name": "Chicago"}, "absolute_url": "https://x/999"},
+    ]}
+    flat = _parse_greenhouse_jobs_flat(gh_flat, "IMC Trading")
+    ok &= _check("greenhouse /jobs parses department-less postings", len(flat) == 2)
+    flat_events = [job_to_event(j) for j in flat if is_event(j.title)]
+    ok &= _check("greenhouse /jobs keeps the networking event (with link), drops the eng job",
+                 [e.title for e in flat_events] == ["Aarhus Networking event | IMC Trading"]
+                 and flat_events[0].register_url.endswith("/4787218101"))
+
+    # ---- Jane Street events page (Phase 2) — real card DOM ------------------ #
+    js_html = """
+    <a class="wise" href="/join-jane-street/programs-and-events/wise/">
+      <div class="program-card wise"><div class="inner-container">
+        <h4 class="program-label">PROGRAM</h4>
+        <h3 class="program-title">WiSE</h3>
+        <h6 class="accepting-applications-label subheading">ACCEPTING APPLICATIONS</h6>
+        <p class="description">Women in STEM and Engineering.</p></div></div></a>
+    <a class="estimathon" href="/join-jane-street/programs-and-events/estimathon/">
+      <div class="program-card estimathon"><div class="inner-container">
+        <h4 class="program-label">EVENT</h4>
+        <h3 class="program-title">Estimathon</h3></div></div></a>
+    <a href="/join-jane-street/programs-and-events/">Programs and events</a>
+    <a href="/who-we-are/">Who We Are</a>
+    """
+    jse = _parse_janestreet_events(js_html, "Jane Street")
+    ok &= _check("jane street parses 2 event cards (nav/listing link excluded)", len(jse) == 2)
+    ok &= _check("jane street builds 'Label: Title' + absolute register link",
+                 sorted(e.title for e in jse) == ["Event: Estimathon", "Program: WiSE"]
+                 and all(e.register_url.startswith(_JS_EVENTS_BASE + "/join-jane-street/"
+                                                   "programs-and-events/") for e in jse))
+
     print("\nSELF-TEST:", "ALL PASSED ✅" if ok else "FAILURES ❌")
     return 0 if ok else 1
 
@@ -1272,6 +1708,12 @@ def main() -> int:
                          "then exit. No email is sent if nothing is new.")
     ap.add_argument("--email-db", action="store_true",
                     help="Email every posting already in the store (no scraping), then exit.")
+    ap.add_argument("--events-once", action="store_true",
+                    help="Run ONE events pass (all sources), email any new events, then exit.")
+    ap.add_argument("--events-interval", type=int, metavar="MIN",
+                    help="Loop the events check every MIN minutes.")
+    ap.add_argument("--list-events", action="store_true",
+                    help="Print currently-detected events (no email), then exit.")
     ap.add_argument("--debug", action="store_true", help="Dump rendered HTML for JS/AJAX sites.")
     ap.add_argument("--notify-seed", action="store_true", help="Email even on the first (seeding) run.")
     ap.add_argument("--selftest", action="store_true", help="Run offline parser tests and exit.")
@@ -1288,6 +1730,14 @@ def main() -> int:
         return run_company(args.company, debug=args.debug)
     if args.email_db:
         return email_db()
+    if args.list_events:
+        return list_events(debug=args.debug)
+    if args.events_once:
+        run_events_once(debug=args.debug)
+        return 0
+    if args.events_interval:
+        run_events_loop(args.events_interval, debug=args.debug)
+        return 0
 
     if args.once:
         run_once(debug=args.debug, notify_seed=args.notify_seed)

@@ -57,6 +57,45 @@ new postings after that.
 
 ---
 
+## Events (recruiting events, not jobs)
+
+Detects **events** — info sessions, networking nights, trading challenges, tech
+talks, women-in-trading days — on the firms' Greenhouse boards and emails you the
+**direct registration link**. No relevance/US/date filtering: if it's classified as
+an event, you get it (foreign events included).
+
+```bash
+./run.sh --list-events          # show events detected right now (no email, no store)
+./run.sh --events-once          # one pass; emails any NEW events, then exits
+./run.sh --events-interval 120  # loop, checking for new events every 120 min
+```
+
+The **first** `--events-once` emails every event currently open (no silent seeding —
+the set is small and time-sensitive); after that only newly-posted events. Events are
+deduped in the same `seen_jobs.sqlite3` file under a separate `seen_events` table, so
+the jobs watcher is completely unaffected. Run events on their own cron line:
+
+```
+30 */2 * * * /Users/kavinsankar/Downloads/HFT_Job_Scraper/run.sh --events-once >> /Users/kavinsankar/Downloads/HFT_Job_Scraper/cron.log 2>&1
+```
+
+> **Coverage note:** Events come from two kinds of source. **Greenhouse boards** (the 22
+> already watched) are low-yield — events sit mixed into the job board, detected by title.
+> **Jane Street's** `programs-and-events` page is fully covered (every entry is a real
+> program/event — AMP, INSIGHT, WiSE, QTC, JSIP, …). **JS-rendered firm pages** (Hudson
+> River Trading wired; Citadel and Two Sigma are candidates) need the optional Playwright
+> renderer:
+>
+> ```bash
+> .venv/bin/pip install playwright && .venv/bin/playwright install chromium
+> ./run.sh --list-events --debug   # dumps debug_<firm>.html so you can tune its link pattern
+> ```
+>
+> Then adjust that firm's `link_regex` in `EVENT_SOURCES` (top of `job_watcher.py`) to
+> match its event-card anchors.
+
+---
+
 ## Stopping it
 
 ```bash
@@ -154,7 +193,10 @@ sqlite3 seen_jobs.sqlite3 "SELECT COUNT(*) FROM seen;"
 # List everything currently tracked
 sqlite3 seen_jobs.sqlite3 "SELECT company, title FROM seen ORDER BY company;"
 
-# Wipe it and start fresh (next run re-seeds)
+# Events live in the same file under a separate table
+sqlite3 seen_jobs.sqlite3 "SELECT company, title FROM seen_events ORDER BY company;"
+
+# Wipe it and start fresh (next run re-seeds jobs; next --events-once re-emails events)
 rm -f seen_jobs.sqlite3
 ```
 

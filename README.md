@@ -50,6 +50,8 @@ chmod 700 run.sh
 ./run.sh --interval 120  # loop forever, checking every 120 minutes
 ./run.sh --company DRW   # scrape ONE firm now for SWE roles (see below)
 ./run.sh --email-db      # email everything already stored (no scraping)
+./run.sh --list-events   # show recruiting EVENTS detected right now (no email)
+./run.sh --events-once   # email direct register links for any NEW events
 ```
 
 The **first run seeds silently** so you don't get flooded. From then on you're emailed
@@ -76,6 +78,34 @@ the background watcher:
 
 So the first `./run.sh --company DRW` emails every current US SWE role at DRW, then only
 newly-posted ones after that.
+
+### Recruiting events (`--events-once`)
+
+Beyond jobs, the watcher can surface **recruiting events** — info sessions, networking
+nights, trading challenges, tech talks, women-in-trading days — and email you the
+**direct registration link** so you can sign up fast. Unlike the job filters, there is
+**no** relevance/US/date filtering: if a posting is classified as an event, you get it.
+
+```bash
+./run.sh --list-events          # see what's detected right now (no email sent)
+./run.sh --events-once          # email register links for any NEW events
+./run.sh --events-interval 120  # keep checking every 120 min
+```
+
+The first `--events-once` emails everything currently open (no silent seeding), then
+only new events after that. Events dedupe in a separate `seen_events` table inside the
+same SQLite file, so the job watcher is untouched. Event sources:
+
+- **Greenhouse boards** — events detected by title on the 22 boards already watched.
+  Low yield (events sit mixed into the job board with no dedicated events page).
+- **Jane Street** — its server-rendered `programs-and-events` page; every entry (AMP,
+  INSIGHT, WiSE, QTC, JSIP, Graduate Research Fellowship, …) is a real program/event.
+- **JS-rendered firm pages** (opt-in) — Hudson River Trading is wired via the optional
+  Playwright renderer; install Playwright to activate it, then tune its link pattern
+  with `--list-events --debug`. Citadel / Two Sigma are candidates for the same path
+  (Citadel WAF-blocks plain requests; Two Sigma has no public events listing yet).
+
+See **[COMMANDS.md](COMMANDS.md)** for details.
 
 ## Running it in the background
 

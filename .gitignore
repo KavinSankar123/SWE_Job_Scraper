@@ -16,3 +16,4 @@ seen_jobs.sqlite3
 cron.log
 launchd.*.log
 debug_*.html
+watcher.out
