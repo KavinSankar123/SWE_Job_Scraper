@@ -72,7 +72,7 @@ an event, you get it (foreign events included).
 
 The **first** `--events-once` emails every event currently open (no silent seeding —
 the set is small and time-sensitive); after that only newly-posted events. Events are
-deduped in the same `seen_jobs.sqlite3` file under a separate `seen_events` table, so
+deduped in the same `quant/seen_jobs.sqlite3` file under a separate `seen_events` table, so
 the jobs watcher is completely unaffected. Run events on their own cron line:
 
 ```
@@ -112,7 +112,7 @@ pkill -f job_watcher.py
 
 ```bash
 pgrep -fl job_watcher.py     # is it running? (prints the process, or nothing)
-tail -f job_watcher.log      # watch it work live (Ctrl+C stops watching, not the job)
+tail -f quant/job_watcher.log      # watch it work live (Ctrl+C stops watching, not the job)
 ```
 
 ---
@@ -148,7 +148,7 @@ print('Sent test email to', to)
 "
 
 # Force a full email of ALL current roles right now (fresh start, then back to new-only)
-rm -f seen_jobs.sqlite3 && ./run.sh --once --notify-seed
+rm -f quant/seen_jobs.sqlite3 && ./run.sh --once --notify-seed
 ```
 
 ---
@@ -169,7 +169,7 @@ export EMAIL_USER="SENDER_EMAIL@gmail.com"        # sends FROM here (owns the ap
 export EMAIL_APP_PASSWORD="aaaa bbbb cccc dddd"   # the 16-char code — NO space after the =
 export EMAIL_TO="kavin.sankar@gmail.com"          # alerts land here
 
-exec .venv/bin/python job_watcher.py "$@"
+exec .venv/bin/python quant/job_watcher.py "$@"
 EOF
 chmod 700 run.sh
 ```
@@ -181,23 +181,23 @@ chmod 700 run.sh
 
 ## The job database (dedup store)
 
-The file `seen_jobs.sqlite3` remembers what you've already been emailed.
+The file `quant/seen_jobs.sqlite3` remembers what you've already been emailed.
 
 ```bash
 # Email a snapshot of EVERYTHING currently in the store (no scraping, store unchanged)
 ./run.sh --email-db
 
 # How many roles are tracked
-sqlite3 seen_jobs.sqlite3 "SELECT COUNT(*) FROM seen;"
+sqlite3 quant/seen_jobs.sqlite3 "SELECT COUNT(*) FROM seen;"
 
 # List everything currently tracked
-sqlite3 seen_jobs.sqlite3 "SELECT company, title FROM seen ORDER BY company;"
+sqlite3 quant/seen_jobs.sqlite3 "SELECT company, title FROM seen ORDER BY company;"
 
 # Events live in the same file under a separate table
-sqlite3 seen_jobs.sqlite3 "SELECT company, title FROM seen_events ORDER BY company;"
+sqlite3 quant/seen_jobs.sqlite3 "SELECT company, title FROM seen_events ORDER BY company;"
 
 # Wipe it and start fresh (next run re-seeds jobs; next --events-once re-emails events)
-rm -f seen_jobs.sqlite3
+rm -f quant/seen_jobs.sqlite3
 ```
 
 ---
@@ -205,7 +205,7 @@ rm -f seen_jobs.sqlite3
 ## Fixing a site that returns 0 roles
 
 ```bash
-./run.sh --once --debug      # dumps debug_<company>.html for the JS/AJAX sites
+./run.sh --once --debug      # dumps quant/debug_<company>.html for the JS/AJAX sites
 ```
 
 Every firm works out of the box (DRW included — it no longer needs a browser).
@@ -266,5 +266,5 @@ launchctl unload ~/Library/LaunchAgents/com.kavin.jobwatcher.plist   # stop
 
 **Remove all saved jobs in the database and email a fresh list of postings**
 ```bash
-rm -f seen_jobs.sqlite3 && ./run.sh --once --notify-seed
+rm -f quant/seen_jobs.sqlite3 && ./run.sh --once --notify-seed
 ```

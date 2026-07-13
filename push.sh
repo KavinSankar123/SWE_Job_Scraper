@@ -2,10 +2,10 @@
 # -----------------------------------------------------------------------------
 # push.sh — stage, safety-check, commit, and push in one step.
 #
-# It refuses to push if your secret launcher (run.sh) or a real-looking Gmail
-# app password ever ends up staged, so credentials can't leak into the repo.
-# run.sh is git-ignored, so it is never staged in the first place — this is a
-# belt-and-suspenders backstop.
+# It refuses to push if a secret launcher (run.sh, run_tech.sh) or a real-looking
+# Gmail app password ever ends up staged, so credentials can't leak into the repo.
+# Both launchers are git-ignored, so they are never staged in the first place —
+# this is a belt-and-suspenders backstop.
 #
 # Usage:
 #   ./push.sh "your commit message"     stage everything, commit, and push
@@ -37,8 +37,12 @@ echo
 # SAFETY GATE — never let the secret launcher or a real credential through.
 # ---------------------------------------------------------------------------- #
 fail=0
-git check-ignore -q run.sh || { echo "  !! run.sh is NOT git-ignored"; fail=1; }
-git diff --cached --name-only | grep -qx "run.sh" && { echo "  !! run.sh is staged"; fail=1; }
+# Both launchers hold a real Gmail app password (run.sh -> quant, run_tech.sh -> tech).
+for secret in run.sh run_tech.sh; do
+  [ -e "$secret" ] || continue
+  git check-ignore -q "$secret" || { echo "  !! $secret is NOT git-ignored"; fail=1; }
+  git diff --cached --name-only | grep -qx "$secret" && { echo "  !! $secret is staged"; fail=1; }
+done
 
 # Any ADDED line assigning an app-password-shaped value (four 4-letter groups),
 # ignoring the doc placeholders (xxxx / aaaa / abcd efgh ijkl mnop).
