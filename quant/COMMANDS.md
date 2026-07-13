@@ -167,7 +167,7 @@ cd "$(dirname "$0")" || exit 1
 
 export EMAIL_USER="SENDER_EMAIL@gmail.com"        # sends FROM here (owns the app password)
 export EMAIL_APP_PASSWORD="aaaa bbbb cccc dddd"   # the 16-char code — NO space after the =
-export EMAIL_TO="kavin.sankar@gmail.com"          # alerts land here
+export EMAIL_TO="you@gmail.com"                   # alerts land here
 
 exec .venv/bin/python quant/job_watcher.py "$@"
 EOF
