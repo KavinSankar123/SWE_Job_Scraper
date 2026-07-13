@@ -1,6 +1,6 @@
 # Tech Watcher — mid-level SWE roles
 
-Checks **46 tech companies** and emails you when a **new mid-level software engineering
+Checks **56 tech companies** and emails you when a **new mid-level software engineering
 role** is posted. Its own dedup store (`tech/seen_tech_jobs.sqlite3`, table `seen_tech`),
 completely separate from the quant watcher — wiping one never affects the other.
 
@@ -11,7 +11,8 @@ Every company is reached through a **public ATS JSON API** — no scraping, no b
   Scale AI, Twilio, Asana, GitLab, Lyft, Instacart, Elastic, Vercel, Dropbox, Gusto,
   Duolingo, Flexport, Amplitude, Webflow, Carta, Airtable, SoFi, Squarespace
 - **Lever** (1) — Palantir
-- **Ashby** (11) — Perplexity, Harvey, ClickHouse, Cohere, Replit, Vanta, Supabase,
+- **Ashby** (21) — OpenAI, Notion, Ramp, Plaid, Cursor, ElevenLabs, Sierra, Sentry,
+  Modal, Confluent, Perplexity, Harvey, ClickHouse, Cohere, Replit, Vanta, Supabase,
   Linear, Zip, Watershed, Runway
 
 > Setup (virtualenv + `run_tech.sh` with your Gmail app password) is in the

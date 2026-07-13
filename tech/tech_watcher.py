@@ -217,6 +217,18 @@ COMPANIES = [
     {"name": "Zip",          "adapter": "ashby", "board_token": "zip"},
     {"name": "Watershed",    "adapter": "ashby", "board_token": "watershed"},
     {"name": "Runway",       "adapter": "ashby", "board_token": "runway"},
+    # These all 404 on Greenhouse — they're on Ashby. (Verify a token before adding:
+    # a wrong one fails silently, and the firm simply never returns any jobs.)
+    {"name": "OpenAI",       "adapter": "ashby", "board_token": "openai"},
+    {"name": "Notion",       "adapter": "ashby", "board_token": "notion"},
+    {"name": "Ramp",         "adapter": "ashby", "board_token": "ramp"},
+    {"name": "Plaid",        "adapter": "ashby", "board_token": "plaid"},
+    {"name": "Cursor",       "adapter": "ashby", "board_token": "cursor"},
+    {"name": "ElevenLabs",   "adapter": "ashby", "board_token": "elevenlabs"},
+    {"name": "Sierra",       "adapter": "ashby", "board_token": "sierra"},
+    {"name": "Sentry",       "adapter": "ashby", "board_token": "sentry"},
+    {"name": "Modal",        "adapter": "ashby", "board_token": "modal"},
+    {"name": "Confluent",    "adapter": "ashby", "board_token": "confluent"},
 ]
 
 
