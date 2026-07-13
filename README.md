@@ -107,6 +107,61 @@ same SQLite file, so the job watcher is untouched. Event sources:
 
 See **[COMMANDS.md](COMMANDS.md)** for details.
 
+## Tech companies, mid-level SWE (`tech_watcher.py`)
+
+A **separate** watcher for mid-level software roles at tech companies — its own script,
+its own dedup store (`seen_tech_jobs.sqlite3`, table `seen_tech`), so it never touches
+the quant/new-grad watcher above.
+
+**46 companies**, all reached through public ATS JSON APIs (no scraping, no browser):
+- **Greenhouse** (34) — Stripe, Databricks, Anthropic, Airbnb, Coinbase, Cloudflare,
+  MongoDB, Reddit, Pinterest, Figma, Discord, Robinhood, Brex, Twilio, GitLab, Lyft, …
+- **Lever** (1) — Palantir
+- **Ashby** (11) — Perplexity, Harvey, ClickHouse, Cohere, Replit, Vanta, Supabase, Linear, …
+
+### What counts as "mid-level"
+
+Deliberately **broad**: any software-engineering title that is **neither** senior-tier
+(senior / staff / principal / lead / manager / director / …) **nor** entry-level
+(intern / new-grad / junior / …). An unlevelled `Software Engineer` counts, as does
+`Software Engineer II/III`. US-only by default (`US_ONLY`).
+
+Two title traps it handles that naive matching gets wrong:
+- `Member of Technical Staff (Software Engineer)` contains **"staff"** but is a mid-level
+  IC title → **kept**.
+- `Internal Tools Engineer` contains **"intern"** → **kept** (word-boundary matching).
+
+### Setup & run
+
+It reads the **same** email env vars, so give it its own private launcher (git-ignored):
+
+```bash
+cat > run_tech.sh <<'EOF'
+#!/usr/bin/env bash
+cd "$(dirname "$0")" || exit 1
+export EMAIL_USER="you@gmail.com"
+export EMAIL_APP_PASSWORD="xxxx xxxx xxxx xxxx"
+export EMAIL_TO="you@gmail.com"
+exec .venv/bin/python tech_watcher.py "$@"
+EOF
+chmod 700 run_tech.sh
+```
+
+```bash
+./run_tech.sh --list                  # the 46 companies, grouped by ATS
+./run_tech.sh --preview               # print every matching role — no email, no DB write
+./run_tech.sh --preview --company Stripe   # sanity-check one firm's filter output
+./run_tech.sh --once                  # single pass (first pass seeds silently)
+./run_tech.sh --interval 180          # loop, checking every 180 min
+./run_tech.sh --company Stripe        # scrape ONE firm now, email anything new
+./run_tech.sh --selftest              # offline filter/parser tests
+```
+
+Use `--preview` first — it shows exactly what would be emailed without sending anything
+or seeding the store. Adding a company is a one-liner in `COMPANIES`; find its token in
+its careers URL (`boards.greenhouse.io/<token>`, `jobs.lever.co/<token>`,
+`jobs.ashbyhq.com/<token>`).
+
 ## Running it in the background
 
 For always-on operation that survives logout/reboot (launchd or cron), see the

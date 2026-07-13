@@ -1,5 +1,6 @@
-# Secrets — the private launcher holds your Gmail App Password
+# Secrets — the private launchers hold your Gmail App Password
 run.sh
+run_tech.sh
 
 # Local tooling / editor
 .claude/
@@ -12,6 +13,7 @@ __pycache__/
 
 # Runtime state, logs, and debug dumps
 seen_jobs.sqlite3
+seen_tech_jobs.sqlite3
 *.log
 cron.log
 launchd.*.log
