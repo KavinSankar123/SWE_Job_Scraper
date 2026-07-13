@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+# ---------------------------------------------------------------------------
+# Private launcher — this file will hold YOUR Gmail App Password.
+# Never commit it, never share it, never email it to anyone.
+# ---------------------------------------------------------------------------
+cd "$(dirname "$0")" || exit 1
+
+# 1. The Gmail account that SENDS the alerts (it owns the app password below).
+export EMAIL_USER="you@gmail.com"
+
+# 2. A Gmail APP PASSWORD — 16 characters, NOT your normal login password.
+#    Create one at: https://myaccount.google.com/apppasswords
+#    (requires 2-Step Verification to be turned on first)
+#    NOTE: no spaces around the "=" sign.
+export EMAIL_APP_PASSWORD="xxxx xxxx xxxx xxxx"
+
+# 3. Where the job alerts should land (can be the same address).
+export EMAIL_TO="you@gmail.com"
+
+# ---------------------------------------------------------------------------
+# Not using Gmail? Also set these (587 -> STARTTLS, 465 -> SSL):
+#   export EMAIL_SMTP_HOST="smtp.yourprovider.com"
+#   export EMAIL_SMTP_PORT="465"
+# ---------------------------------------------------------------------------
+
+exec .venv/bin/python tech_watcher.py "$@"
