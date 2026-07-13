@@ -26,13 +26,31 @@ Each watcher stores its state **next to its own script** (`quant/seen_jobs.sqlit
 
 ---
 
-## 1. Install (once)
+## Setup
 
 ```bash
-cd ~/Downloads/HFT_Job_Scraper
-python3 -m venv .venv
-.venv/bin/pip install -r requirements.txt
+git clone https://github.com/KavinSankar123/SWE_Job_Scraper.git
+cd SWE_Job_Scraper
+./setup.sh
 ```
+
+`setup.sh` builds the virtualenv, installs dependencies, self-tests both watchers, and
+creates your launchers (`run.sh`, `run_tech.sh`) from the `.example` templates.
+
+Then **add your email credentials** — open `run_tech.sh` (and/or `run.sh`) and fill in the
+three values at the top. Gmail needs an **App Password**
+(<https://myaccount.google.com/apppasswords> — turn on 2-Step Verification first); your
+normal password will not work.
+
+```bash
+export EMAIL_USER="you@gmail.com"                 # sends FROM here (owns the app password)
+export EMAIL_APP_PASSWORD="xxxx xxxx xxxx xxxx"   # the 16-char code — NO spaces around =
+export EMAIL_TO="you@gmail.com"                   # where alerts are delivered
+```
+
+Both launchers are **git-ignored**, so your password is never committed, `git pull` never
+overwrites it, and `push.sh` refuses to push if either one ever gets staged. Non-Gmail?
+also set `EMAIL_SMTP_HOST` / `EMAIL_SMTP_PORT` inside them (587 → STARTTLS, 465 → SSL).
 
 Optional — only a fallback for the JS-rendered quant pages (Citadel, and the HRT events
 page). Everything else works without it:
@@ -41,39 +59,27 @@ page). Everything else works without it:
 .venv/bin/pip install playwright && .venv/bin/playwright install chromium
 ```
 
-## 2. Configure email (once)
+## Staying up to date
 
-Each watcher is driven by a private launcher at the repo root that holds your Gmail
-credentials and runs the right script through the virtualenv. Gmail needs an
-**App Password** (Google Account → Security → 2-Step Verification → App passwords) —
-your normal password will not work.
+New companies get added upstream over time. To pick them up:
 
 ```bash
-# quant watcher
-cat > run.sh <<'EOF'
-#!/usr/bin/env bash
-cd "$(dirname "$0")" || exit 1
-export EMAIL_USER="you@gmail.com"                 # sends FROM here (owns the app password)
-export EMAIL_APP_PASSWORD="xxxx xxxx xxxx xxxx"   # the 16-char code — NO spaces around =
-export EMAIL_TO="you@gmail.com"                   # where alerts are delivered
-exec .venv/bin/python quant/job_watcher.py "$@"
-EOF
-chmod 700 run.sh
-
-# tech watcher — same three values, different script
-sed 's|quant/job_watcher\.py|tech/tech_watcher.py|' run.sh > run_tech.sh
-chmod 700 run_tech.sh
+git pull
+./run_tech.sh --once      # you'll be emailed the open roles at any newly-added company
 ```
 
-Both launchers are **git-ignored**, so your password is never committed, and `push.sh`
-refuses to push if either one ever gets staged. Non-Gmail? also set `EMAIL_SMTP_HOST` /
-`EMAIL_SMTP_PORT` inside them (587 → STARTTLS, 465 → SSL).
+`setup.sh` is safe to re-run after a pull (do it if dependencies changed) — it **never**
+overwrites an existing launcher and **never** touches your database. Concretely:
 
-> Prefer no launcher? `export` those three variables in your shell and run
-> `.venv/bin/python quant/job_watcher.py …` directly — the scripts read them from the
-> environment.
+| | Tracked by git? | What `git pull` does to it |
+|---|---|---|
+| `quant/job_watcher.py`, `tech/tech_watcher.py` | yes | **updated** — new companies arrive here |
+| `run.sh`, `run_tech.sh` (your password) | **no** — git-ignored | untouched |
+| `seen_jobs.sqlite3`, `seen_tech_jobs.sqlite3` (what you've seen) | **no** — git-ignored | untouched |
 
-## 3. Run
+So pulling never re-emails you old roles and never clobbers your credentials.
+
+## Run
 
 Always run the launchers **from the repo root**:
 
