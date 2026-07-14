@@ -542,7 +542,12 @@ def collect_all() -> list[Job]:
 # Storage (SQLite) — its own file AND its own table, separate from job_watcher
 # --------------------------------------------------------------------------- #
 def db_connect() -> sqlite3.Connection:
-    con = sqlite3.connect(DB_PATH)
+    # A background `--interval` loop and a manual `--once` can run at the same time, so
+    # two processes may touch this file at once. WAL + a busy timeout let them share it
+    # instead of failing with "database is locked".
+    con = sqlite3.connect(DB_PATH, timeout=30)
+    con.execute("PRAGMA journal_mode=WAL")
+    con.execute("PRAGMA busy_timeout=30000")
     con.execute(
         """CREATE TABLE IF NOT EXISTS seen_tech (
                key        TEXT PRIMARY KEY,
@@ -672,7 +677,43 @@ def run_once(notify_seed: bool = False) -> None:
         con.close()
 
 
+def _source_fingerprint() -> tuple[int, int]:
+    """(mtime, size) of this script — changes the moment a `git pull` rewrites it."""
+    st = Path(__file__).resolve().stat()
+    return (st.st_mtime_ns, st.st_size)
+
+
+def _restart_if_source_changed(fingerprint: tuple[int, int]) -> tuple[int, int]:
+    """Re-exec if this file changed on disk since the loop started.
+
+    Python imports this module ONCE, so `COMPANIES` is bound at process start. A
+    long-running `--interval` loop would therefore keep scraping the company list it
+    loaded at boot — a `git pull` that adds companies would be silently ignored, forever,
+    until someone restarted it. Detect the change and re-exec ourselves (same args, same
+    env, same redirected stdout) so the next cycle picks up the new list.
+    """
+    current = _source_fingerprint()
+    if current == fingerprint:
+        return fingerprint
+
+    path = Path(__file__).resolve()
+    try:                                   # a broken pull must not kill a working watcher
+        compile(path.read_text(encoding="utf-8"), str(path), "exec")
+    except (SyntaxError, OSError) as e:
+        log.error("%s changed but won't compile (%s) — staying on the running version.",
+                  path.name, e)
+        return current                     # don't retry until it changes again
+
+    log.info("%s changed on disk — restarting to pick up the new company list.", path.name)
+    for h in log.handlers:
+        h.flush()
+    sys.stdout.flush()
+    sys.stderr.flush()
+    os.execv(sys.executable, [sys.executable, str(path), *sys.argv[1:]])  # never returns
+
+
 def run_loop(interval_min: int, notify_seed: bool) -> None:
+    fingerprint = _source_fingerprint()
     log.info("Watching %d tech companies every %d min. Ctrl+C to stop.",
              len(COMPANIES), interval_min)
     while True:
@@ -685,6 +726,8 @@ def run_loop(interval_min: int, notify_seed: bool) -> None:
         except KeyboardInterrupt:
             log.info("Stopped.")
             return
+        # A `git pull` may have added companies while we slept — reload if so.
+        fingerprint = _restart_if_source_changed(fingerprint)
 
 
 def find_company(query: str) -> dict | None:

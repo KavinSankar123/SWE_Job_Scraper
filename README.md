@@ -68,6 +68,23 @@ git pull
 ./run_tech.sh --once      # you'll be emailed the open roles at any newly-added company
 ```
 
+### If you're running a background `--interval` loop
+
+A long-running loop **auto-restarts itself** when `git pull` updates the script, so it
+picks up newly-added companies on its next cycle:
+
+```
+tech_watcher.py changed on disk — restarting to pick up the new company list.
+Watching 119 tech companies every 120 min. Ctrl+C to stop.
+```
+
+This matters because Python loads the company list **once, at process start**. Without
+the auto-restart, a loop started *before* a pull would keep scraping the **old** list
+forever — silently ignoring every newly-added company — until someone restarted it by
+hand. Now you can just `git pull` and leave it running. (A pull that somehow breaks the
+script won't kill the watcher either: it logs the error and keeps running the version it
+already has.)
+
 `setup.sh` is safe to re-run after a pull (do it if dependencies changed) — it **never**
 overwrites an existing launcher and **never** touches your database. Concretely:
 

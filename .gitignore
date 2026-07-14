@@ -12,8 +12,8 @@ __pycache__/
 *.pyc
 
 # Runtime state, logs, and debug dumps
-seen_jobs.sqlite3
-seen_tech_jobs.sqlite3
+# (*.sqlite3* also covers the -wal / -shm sidecars WAL mode creates)
+*.sqlite3*
 *.log
 cron.log
 launchd.*.log

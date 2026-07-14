@@ -1096,7 +1096,12 @@ def collect_events(debug: bool = False) -> list[Event]:
 # Storage (SQLite)
 # --------------------------------------------------------------------------- #
 def db_connect() -> sqlite3.Connection:
-    con = sqlite3.connect(DB_PATH)
+    # A background --interval loop and a manual run can overlap, so two processes may
+    # touch this file at once. WAL + a busy timeout let them share it instead of failing
+    # with "database is locked".
+    con = sqlite3.connect(DB_PATH, timeout=30)
+    con.execute("PRAGMA journal_mode=WAL")
+    con.execute("PRAGMA busy_timeout=30000")
     con.execute(
         """CREATE TABLE IF NOT EXISTS seen (
                key        TEXT PRIMARY KEY,
@@ -1393,7 +1398,41 @@ def email_db() -> int:
     return 0 if ok else 1
 
 
+def _source_fingerprint() -> tuple[int, int]:
+    """(mtime, size) of this script — changes the moment a `git pull` rewrites it."""
+    st = Path(__file__).resolve().stat()
+    return (st.st_mtime_ns, st.st_size)
+
+
+def _restart_if_source_changed(fingerprint: tuple[int, int]) -> tuple[int, int]:
+    """Re-exec if this file changed on disk since the loop started.
+
+    Python imports this module ONCE, so COMPANIES/EVENT_SOURCES are bound at process
+    start. A long-running --interval loop would otherwise keep scraping the list it
+    loaded at boot, silently ignoring anything a `git pull` added, until restarted.
+    """
+    current = _source_fingerprint()
+    if current == fingerprint:
+        return fingerprint
+
+    path = Path(__file__).resolve()
+    try:                                   # a broken pull must not kill a working watcher
+        compile(path.read_text(encoding="utf-8"), str(path), "exec")
+    except (SyntaxError, OSError) as e:
+        log.error("%s changed but won't compile (%s) — staying on the running version.",
+                  path.name, e)
+        return current
+
+    log.info("%s changed on disk — restarting to pick up the new list.", path.name)
+    for h in log.handlers:
+        h.flush()
+    sys.stdout.flush()
+    sys.stderr.flush()
+    os.execv(sys.executable, [sys.executable, str(path), *sys.argv[1:]])  # never returns
+
+
 def run_loop(interval_min: int, debug: bool, notify_seed: bool) -> None:
+    fingerprint = _source_fingerprint()
     log.info("Watching %d companies every %d min. Ctrl+C to stop.", len(COMPANIES), interval_min)
     while True:
         try:
@@ -1405,6 +1444,8 @@ def run_loop(interval_min: int, debug: bool, notify_seed: bool) -> None:
         except KeyboardInterrupt:
             log.info("Stopped.")
             return
+        # A `git pull` may have added companies while we slept — reload if so.
+        fingerprint = _restart_if_source_changed(fingerprint)
 
 
 # --------------------------------------------------------------------------- #
@@ -1444,6 +1485,7 @@ def run_events_once(debug: bool = False) -> None:
 
 
 def run_events_loop(interval_min: int, debug: bool = False) -> None:
+    fingerprint = _source_fingerprint()
     n = sum(1 for c in list(COMPANIES) + EVENT_SOURCES if c["adapter"] in EVENT_ADAPTERS)
     log.info("Watching events at %d companies every %d min. Ctrl+C to stop.", n, interval_min)
     while True:
@@ -1456,6 +1498,8 @@ def run_events_loop(interval_min: int, debug: bool = False) -> None:
         except KeyboardInterrupt:
             log.info("Stopped.")
             return
+        # A `git pull` may have added event sources while we slept — reload if so.
+        fingerprint = _restart_if_source_changed(fingerprint)
 
 
 def list_events(debug: bool = False) -> int:
