@@ -7,7 +7,7 @@ other, and you can run either (or both).
 | Watcher | Watches for | Docs |
 |---|---|---|
 | **`quant/`** | Quant/HFT **new-grad** SWE roles + recruiting **events** (29 firms) | [quant/README.md](quant/README.md) · [quant/COMMANDS.md](quant/COMMANDS.md) |
-| **`tech/`** | Tech-company **mid-level** SWE roles (46 firms) | [tech/README.md](tech/README.md) |
+| **`tech/`** | Tech-company **mid-level** SWE roles (119 firms) | [tech/README.md](tech/README.md) |
 | **`dist/`** | Packages the tech watcher into a zip to share with someone else | [dist/](dist/) |
 
 ```

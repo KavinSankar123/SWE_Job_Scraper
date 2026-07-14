@@ -1,19 +1,30 @@
 # Tech Watcher — mid-level SWE roles
 
-Checks **56 tech companies** and emails you when a **new mid-level software engineering
+Checks **119 tech companies** and emails you when a **new mid-level software engineering
 role** is posted. Its own dedup store (`tech/seen_tech_jobs.sqlite3`, table `seen_tech`),
 completely separate from the quant watcher — wiping one never affects the other.
 
-Every company is reached through a **public ATS JSON API** — no scraping, no browser:
+Every company is reached through a **public ATS JSON API** — no scraping, no browser.
+Across all 119 boards that's ~15,800 postings, of which ~1,450 are mid-level US SWE roles.
 
-- **Greenhouse** (34) — Stripe, Databricks, Anthropic, Airbnb, Coinbase, Cloudflare,
-  MongoDB, Reddit, Pinterest, Figma, Discord, Robinhood, Affirm, Brex, Chime, Samsara,
-  Scale AI, Twilio, Asana, GitLab, Lyft, Instacart, Elastic, Vercel, Dropbox, Gusto,
-  Duolingo, Flexport, Amplitude, Webflow, Carta, Airtable, SoFi, Squarespace
-- **Lever** (1) — Palantir
-- **Ashby** (21) — OpenAI, Notion, Ramp, Plaid, Cursor, ElevenLabs, Sierra, Sentry,
-  Modal, Confluent, Perplexity, Harvey, ClickHouse, Cohere, Replit, Vanta, Supabase,
-  Linear, Zip, Watershed, Runway
+**Greenhouse (70)** · Stripe, Databricks, Anthropic, Airbnb, Coinbase, Cloudflare, MongoDB,
+Reddit, Pinterest, Figma, Discord, Robinhood, Datadog, Okta, Roblox, Waymo, CoreWeave, xAI,
+Block, Verkada, Grafana Labs, Figure AI, Nuro, Fivetran, Postman, Klaviyo, Together AI,
+Tailscale, Braze, Chainguard, Abnormal Security, Twitch, Peloton, Faire, Mercury, Gemini,
+Cockroach Labs, PlanetScale, Marqeta, Starburst, Affirm, Brex, Chime, Samsara, Scale AI,
+Twilio, Asana, GitLab, Lyft, Instacart, Elastic, Vercel, Dropbox, Gusto, Duolingo, Flexport,
+Amplitude, Webflow, Carta, Airtable, SoFi, Squarespace, Justworks, Attentive, project44,
+Betterment, Komodo Health, Iterable, Calendly, StockX
+
+**Lever (6)** · Palantir, Shield AI, Zoox, Outreach, Wealthfront, Ro
+
+**Ashby (43)** · OpenAI, Snowflake, Notion, Ramp, Plaid, Cursor, ElevenLabs, Sierra, Sentry,
+Modal, Confluent, Cerebras, Crusoe, Saronic, Physical Intelligence, Decagon, Writer, Docker,
+1Password, Temporal, Benchling, Render, Railway, Airbyte, Neon, Zapier, Miro, Strava,
+Poshmark, Modern Treasury, Dave, Quora, Perplexity, Harvey, ClickHouse, Cohere, Replit,
+Vanta, Supabase, Linear, Zip, Watershed, Runway
+
+The authoritative list is `COMPANIES` at the top of [tech_watcher.py](tech_watcher.py).
 
 > Setup (virtualenv + `run_tech.sh` with your Gmail app password) is in the
 > [root README](../README.md). Run every command **from the repo root**.
