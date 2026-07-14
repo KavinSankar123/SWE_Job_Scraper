@@ -90,7 +90,7 @@ Always run the launchers **from the repo root**:
 ./run.sh --list-events          # recruiting events with direct register links
 
 # tech mid-level SWE roles
-./run_tech.sh --list            # the 46 companies
+./run_tech.sh --list            # the 119 companies
 ./run_tech.sh --preview         # every matching role — no email, no DB write
 ./run_tech.sh --once            # one pass (first run seeds silently)
 ```
