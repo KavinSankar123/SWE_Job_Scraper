@@ -32,7 +32,7 @@ The authoritative list is `COMPANIES` at the top of [tech_watcher.py](tech_watch
 ## Commands
 
 ```bash
-./run_tech.sh --list                      # the 46 companies, grouped by ATS
+./run_tech.sh --list                      # the 119 companies, grouped by ATS
 ./run_tech.sh --preview                   # print every matching role — NO email, NO DB write
 ./run_tech.sh --preview --company Stripe  # sanity-check one firm's filter output
 ./run_tech.sh --once                      # single pass (first pass seeds silently)
@@ -50,6 +50,49 @@ anything or seeding the store.
 roles. Use `--once --notify-seed` if you want that first batch in your inbox.
 `--email-db` does the same for a store that's *already* populated, and leaves it untouched
 (safe to re-run).
+
+## Run it in the background (no terminal open)
+
+```bash
+./tech/install_agent.sh install                     # every 3 hours
+./tech/install_agent.sh install --interval-hours 6
+./tech/install_agent.sh status                      # loaded? last exit code? recent log
+./tech/install_agent.sh run-now                     # trigger a pass immediately
+./tech/install_agent.sh uninstall
+```
+
+This installs a macOS **LaunchAgent** (`~/Library/LaunchAgents/com.kavin.techwatcher.plist`).
+Unlike `nohup ... &`, it survives closing the terminal, logging out, **and rebooting**, and a
+run missed while the laptop slept fires once on wake. Output goes to `launchd.tech.out.log`
+at the repo root.
+
+It runs `--once` on a timer rather than holding an `--interval` loop open. Each fire is a
+fresh process, so a `git pull` that adds companies is picked up automatically on the next
+run — no restart needed.
+
+**If you have no store yet, `install` seeds it first, in the foreground.** That pass sweeps
+every board and takes a few minutes, and emails nothing. Doing it up front means the first
+launchd fire is a normal incremental pass — otherwise the agent looks broken for hours while
+it silently seeds. Skip it with `--no-seed` if you'd rather install instantly.
+
+`install` **refuses to run** while `run_tech.sh` still holds the placeholder password, since
+the agent would otherwise fail silently every few hours. It also refuses to install if the
+repo sits in `~/Downloads`, `~/Documents` or `~/Desktop`, where macOS privacy protection
+(TCC) blocks LaunchAgents from executing files — that combination installs cleanly and then
+fails every single run with exit code 126, writing nothing to the log.
+
+### Checking on it
+
+```bash
+./tech/install_agent.sh status          # the one command to remember
+launchctl list | grep techwatcher       # PID | last exit code | label
+tail -f launchd.tech.out.log            # watch a pass live
+```
+
+`state = not running` is normal, not an error: this is a periodic agent, not a daemon. It
+wakes, sweeps all 119 boards, and exits, so it is only a live process for a few minutes out
+of every few hours. The fields that tell you it's healthy are **`last exit code = 0`** and
+the recent log lines.
 
 ## What counts as "mid-level"
 

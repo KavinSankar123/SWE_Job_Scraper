@@ -3,7 +3,7 @@
 Every command assumes you're **inside the project folder first**:
 
 ```bash
-cd ~/Downloads/HFT_Job_Scraper
+cd ~/Projects/HFT_Job_Scraper
 ```
 
 `run.sh` already holds your email settings and uses the project's virtualenv, so you
@@ -76,7 +76,7 @@ deduped in the same `quant/seen_jobs.sqlite3` file under a separate `seen_events
 the jobs watcher is completely unaffected. Run events on their own cron line:
 
 ```
-30 */2 * * * /Users/kavinsankar/Downloads/HFT_Job_Scraper/run.sh --events-once >> /Users/kavinsankar/Downloads/HFT_Job_Scraper/cron.log 2>&1
+30 */2 * * * /Users/kavinsankar/Projects/HFT_Job_Scraper/run.sh --events-once >> /Users/kavinsankar/Projects/HFT_Job_Scraper/cron.log 2>&1
 ```
 
 > **Coverage note:** Events come from two kinds of source. **Greenhouse boards** (the 22
@@ -221,7 +221,7 @@ ever changes — optional, ~150 MB:
 ## First-time setup on a fresh machine
 
 ```bash
-cd ~/Downloads/HFT_Job_Scraper
+cd ~/Projects/HFT_Job_Scraper
 python3 -m venv .venv
 .venv/bin/pip install -r requirements.txt
 # then recreate run.sh (see "Changing the sender email" above) and chmod 700 run.sh
@@ -242,13 +242,13 @@ so no password lives in this file:
   <key>Label</key><string>com.kavin.jobwatcher</string>
   <key>ProgramArguments</key>
   <array>
-    <string>/Users/kavinsankar/Downloads/HFT_Job_Scraper/run.sh</string>
+    <string>/Users/kavinsankar/Projects/HFT_Job_Scraper/run.sh</string>
     <string>--interval</string><string>120</string>
   </array>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>
-  <key>StandardOutPath</key><string>/Users/kavinsankar/Downloads/HFT_Job_Scraper/launchd.out.log</string>
-  <key>StandardErrorPath</key><string>/Users/kavinsankar/Downloads/HFT_Job_Scraper/launchd.err.log</string>
+  <key>StandardOutPath</key><string>/Users/kavinsankar/Projects/HFT_Job_Scraper/launchd.out.log</string>
+  <key>StandardErrorPath</key><string>/Users/kavinsankar/Projects/HFT_Job_Scraper/launchd.err.log</string>
 </dict></plist>
 ```
 
@@ -260,7 +260,7 @@ launchctl unload ~/Library/LaunchAgents/com.kavin.jobwatcher.plist   # stop
 **cron** (simpler; runs one pass every 2 hours). Run `crontab -e` and add:
 
 ```
-0 */2 * * * /Users/kavinsankar/Downloads/HFT_Job_Scraper/run.sh --once >> /Users/kavinsankar/Downloads/HFT_Job_Scraper/cron.log 2>&1
+0 */2 * * * /Users/kavinsankar/Projects/HFT_Job_Scraper/run.sh --once >> /Users/kavinsankar/Projects/HFT_Job_Scraper/cron.log 2>&1
 ```
 
 

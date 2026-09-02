@@ -34,7 +34,7 @@ echo "==> Installing/updating dependencies..."
 # This is what makes `git pull` safe: run.sh / run_tech.sh are git-ignored and are
 # never regenerated once they exist, so your password is never clobbered.
 created=""
-for w in run_tech run; do
+for w in run_tech run run_newgrad; do
   if [ ! -f "$w.sh" ]; then
     cp "$w.sh.example" "$w.sh"
     chmod 700 "$w.sh"
@@ -43,8 +43,9 @@ for w in run_tech run; do
 done
 
 echo "==> Verifying the install (offline self-test, no network)..."
-.venv/bin/python tech/tech_watcher.py --selftest >/dev/null && echo "    tech watcher  OK"
-.venv/bin/python quant/job_watcher.py --selftest >/dev/null && echo "    quant watcher OK"
+.venv/bin/python tech/tech_watcher.py --selftest >/dev/null && echo "    tech watcher     OK"
+.venv/bin/python quant/job_watcher.py --selftest >/dev/null && echo "    quant watcher    OK"
+.venv/bin/python newgrad/newgrad_watcher.py --selftest >/dev/null && echo "    new-grad watcher OK"
 
 echo
 echo "============================================================"
@@ -72,6 +73,12 @@ cat <<'EOM'
 
    Want that first batch emailed to you anyway?
      ./run_tech.sh --once --notify-seed
+
+ STEP 4 — Run it in the background, forever (macOS launchd). Survives
+          closing the terminal, logging out, and rebooting:
+     ./tech/install_agent.sh install       # mid-level roles, every 3 hours
+     ./newgrad/install_agent.sh install    # new-grad roles, every 2 hours
+     ./tech/install_agent.sh status        # check on it any time
 
  TO GET NEW COMPANIES LATER:
      git pull        # picks up any companies added upstream

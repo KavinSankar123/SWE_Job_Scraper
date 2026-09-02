@@ -2,10 +2,10 @@
 # -----------------------------------------------------------------------------
 # push.sh — stage, safety-check, commit, and push in one step.
 #
-# It refuses to push if a secret launcher (run.sh, run_tech.sh) or a real-looking
-# Gmail app password ever ends up staged, so credentials can't leak into the repo.
-# Both launchers are git-ignored, so they are never staged in the first place —
-# this is a belt-and-suspenders backstop.
+# It refuses to push if a secret launcher (run.sh, run_tech.sh, run_newgrad.sh) or a
+# real-looking Gmail app password ever ends up staged, so credentials can't leak into
+# the repo. All launchers are git-ignored, so they are never staged in the first
+# place — this is a belt-and-suspenders backstop.
 #
 # Usage:
 #   ./push.sh "your commit message"     stage everything, commit, and push
@@ -37,8 +37,9 @@ echo
 # SAFETY GATE — never let the secret launcher or a real credential through.
 # ---------------------------------------------------------------------------- #
 fail=0
-# Both launchers hold a real Gmail app password (run.sh -> quant, run_tech.sh -> tech).
-for secret in run.sh run_tech.sh; do
+# Every launcher holds a real Gmail app password (run.sh -> quant, run_tech.sh -> tech,
+# run_newgrad.sh -> new-grad).
+for secret in run.sh run_tech.sh run_newgrad.sh; do
   [ -e "$secret" ] || continue
   git check-ignore -q "$secret" || { echo "  !! $secret is NOT git-ignored"; fail=1; }
   git diff --cached --name-only | grep -qx "$secret" && { echo "  !! $secret is staged"; fail=1; }

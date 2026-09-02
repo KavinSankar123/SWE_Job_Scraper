@@ -1,6 +1,6 @@
 # Tech Job Watcher — mid-level SWE roles
 
-Checks **46 tech companies** on a schedule and emails you when a **new mid-level
+Checks **119 tech companies** on a schedule and emails you when a **new mid-level
 software engineering role** is posted. You're only emailed once per posting.
 
 Companies are reached through their public job-board APIs (Greenhouse, Lever, Ashby) —
@@ -42,7 +42,7 @@ export EMAIL_TO="you@gmail.com"                   # where alerts land
 ## Running it
 
 ```bash
-./run_tech.sh --list        # the 46 companies being watched
+./run_tech.sh --list        # the 119 companies being watched
 ./run_tech.sh --preview     # print every matching role open right now (NO email)
 ./run_tech.sh --once        # one pass; emails newly-posted roles
 ./run_tech.sh --interval 180    # loop forever, checking every 180 min (Ctrl+C to stop)

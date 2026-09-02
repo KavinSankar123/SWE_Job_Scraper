@@ -1,6 +1,7 @@
 # Secrets — the private launchers hold your Gmail App Password
 run.sh
 run_tech.sh
+run_newgrad.sh
 
 # Local tooling / editor
 .claude/
