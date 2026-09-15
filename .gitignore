@@ -3,6 +3,11 @@ run.sh
 run_tech.sh
 run_newgrad.sh
 
+# Google service-account keys. These belong outside the repo entirely
+# (see tech/SHEETS_SETUP.md); this is only a backstop against a stray `git add`.
+*service-account*.json
+gsheet-*.json
+
 # Local tooling / editor
 .claude/
 .DS_Store

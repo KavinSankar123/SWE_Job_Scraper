@@ -55,6 +55,8 @@ from pathlib import Path
 
 import requests
 
+import sheets_sync
+
 # --------------------------------------------------------------------------- #
 # Paths / logging
 # --------------------------------------------------------------------------- #
@@ -673,6 +675,7 @@ def run_once(notify_seed: bool = False) -> None:
         for j in new_jobs:
             log.info("   + [%s] %s — %s", j.company, j.title, j.url)
         send_email(new_jobs)
+        sheets_sync.sync_jobs(new_jobs)
     finally:
         con.close()
 
@@ -772,6 +775,7 @@ def run_company(query: str) -> int:
             log.info("   + %s — %s", j.title, j.url)
         if send_email(new_jobs):
             save_jobs(con, new_jobs)
+            sheets_sync.sync_jobs(new_jobs)
             return 0
         log.warning("%s: email failed — NOT saving, so they'll retry next run.", cfg["name"])
         return 1
@@ -804,6 +808,51 @@ def email_db() -> int:
     log.info("Emailing %d tracked mid-level role(s)...", len(jobs))
     ok = send_email(jobs, intro="All mid-level roles currently in the database:")
     return 0 if ok else 1
+
+
+def backfill_sheet() -> int:
+    """Push every role already in the dedup store into the Google Sheets tracker.
+
+    For the roles seeded by the first (silent) run, which were never emailed and
+    so never synced. Each row keeps the date it was FIRST seen rather than today,
+    so "Date Scraped" stays honest. Rows already in the sheet are skipped, so
+    running this twice is harmless.
+    """
+    if not sheets_sync.is_enabled():
+        log.error("GSHEET_CREDENTIALS is not set — see tech/SHEETS_SETUP.md.")
+        return 2
+
+    con = db_connect()
+    try:
+        rows = con.execute(
+            "SELECT company, title, url, first_seen FROM seen_tech ORDER BY first_seen, company, title"
+        ).fetchall()
+    finally:
+        con.close()
+
+    if not rows:
+        log.info("Store is empty — nothing to backfill. Run --once first to populate it.")
+        return 0
+
+    sheet_rows = [
+        sheets_sync.SheetRow(
+            company=r[0],
+            job_name=r[1],
+            date_scraped=(r[3] or "")[:10],       # the stored ISO timestamp, date part only
+            app_link=r[2] or "",
+        )
+        for r in rows
+    ]
+    log.info("Backfilling %d tracked role(s) into the sheet...", len(sheet_rows))
+    try:
+        sheets_sync.append_rows(sheet_rows)
+    except sheets_sync.SheetError as e:
+        log.error("%s", e)
+        return 2
+    except Exception as e:  # noqa: BLE001
+        log.error("Backfill failed: %s", e)
+        return 1
+    return 0
 
 
 def preview(query: str | None = None) -> int:
@@ -989,6 +1038,44 @@ def selftest() -> int:
     ok &= _check(f"US filter drops foreign, even w/ unplaceable sibling (offenders: {bad_drop})",
                  not bad_drop)
 
+    # --- sheet sync: the tracker-shape traps --------------------------------- #
+    # The template rows carry a bare "Link" in column F hundreds of rows past the
+    # last real entry, so the insert point must key on Company (col A) alone.
+    grid = [["Company", "Job Name", "Status", "Date Scraped", "Date Applied", "App Link"],
+            ["IMC Trading", "Graduate Software Engineer", "Rejected", "2026-07-01", "",
+             '=HYPERLINK("https://www.imc.com/us/careers/jobs/4818790101","Link")'],
+            ["", "", "", "", "", "Link"],
+            ["", "", "", "", "", "Link"]]
+    ok &= _check("sheet: insert row lands under the last Company, not the last 'Link'",
+                 sheets_sync._first_free_row(grid) == 3)
+    ok &= _check("sheet: blank tab inserts at row 2 (under the header)",
+                 sheets_sync._first_free_row([grid[0]]) == 2)
+
+    ok &= _check("sheet: reads the URL back out of a HYPERLINK formula",
+                 sheets_sync._hyperlink_url(grid[1][5])
+                 == "https://www.imc.com/us/careers/jobs/4818790101")
+    ok &= _check("sheet: the 'Link' placeholder is not a URL",
+                 sheets_sync._hyperlink_url("Link") == "")
+    ok &= _check("sheet: a bare URL cell still reads as a URL",
+                 sheets_sync._hyperlink_url("https://x.com/j/1") == "https://x.com/j/1")
+
+    keys = sheets_sync._existing_keys(grid)
+    ok &= _check(f"sheet: only real rows count as tracked (got {len(keys)})", len(keys) == 1)
+    ok &= _check("sheet: an already-tracked URL is recognised",
+                 sheets_sync.dedup_key("IMC Trading", "Graduate Software Engineer",
+                                       "https://www.imc.com/us/careers/jobs/4818790101/") in keys)
+    ok &= _check("sheet: a trailing slash does not create a duplicate",
+                 sheets_sync.dedup_key("A", "B", "https://x.com/j/1")
+                 == sheets_sync.dedup_key("A", "B", "https://x.com/j/1/"))
+
+    vals = sheets_sync.SheetRow("Stripe", "Software Engineer II", "2026-09-15",
+                                "https://stripe.com/j/1").to_values()
+    ok &= _check(f"sheet: row is 6 columns (got {len(vals)})", len(vals) == 6)
+    ok &= _check("sheet: Status and Date Applied left blank for a scraped role",
+                 vals[2] == "" and vals[4] == "")
+    ok &= _check("sheet: App Link written as a HYPERLINK titled 'Link'",
+                 vals[5] == '=HYPERLINK("https://stripe.com/j/1","Link")')
+
     print("\nSELF-TEST:", "ALL PASSED ✅" if ok else "FAILURES ❌")
     return 0 if ok else 1
 
@@ -1015,6 +1102,12 @@ def main() -> int:
                          "Combine with --company to preview a single firm.")
     ap.add_argument("--email-db", action="store_true",
                     help="Email every role already in the store (no scraping), then exit.")
+    ap.add_argument("--sheet-check", action="store_true",
+                    help="Verify the Google Sheet credentials, tab and permissions "
+                         "without writing anything, then exit.")
+    ap.add_argument("--backfill-sheet", action="store_true",
+                    help="Push every role already in the store into the Google Sheet, "
+                         "then exit. Skips rows the sheet already has.")
     ap.add_argument("--notify-seed", action="store_true",
                     help="Email on the first (seeding) run too.")
     ap.add_argument("--selftest", action="store_true", help="Run offline tests and exit.")
@@ -1026,6 +1119,10 @@ def main() -> int:
         return preview(args.company)
     if args.email_db:
         return email_db()
+    if args.sheet_check:
+        return sheets_sync.check()
+    if args.backfill_sheet:
+        return backfill_sheet()
     if args.list:
         by_ats: dict[str, list[str]] = {}
         for c in COMPANIES:

@@ -5,3 +5,9 @@ beautifulsoup4>=4.12
 # ever changes (DRW works without it). After installing, download the browser:
 #     pip install playwright
 #     playwright install chromium
+
+# Google Sheets sync — the tech watcher appends each new mid-level role to the
+# application tracker. Only needed if you set GSHEET_CREDENTIALS in run_tech.sh;
+# without it the watcher runs exactly as before.
+google-api-python-client>=2.100
+google-auth>=2.23

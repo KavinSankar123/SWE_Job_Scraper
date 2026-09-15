@@ -1,0 +1,157 @@
+# Google Sheets sync — setup
+
+The tech watcher can append every new mid-level role straight into the
+**Mid Level SWE Job App Tracker**, at the same moment it emails you.
+
+It writes the row from the scraper's own `Job` objects, in `run_once()` right
+next to `send_email()` — it does **not** read your inbox. The email and the
+sheet row come from the same data, so nothing has to be parsed back out of an
+email, and changing the email template can never break the sync.
+
+What lands in the sheet:
+
+| Column | Value |
+|---|---|
+| Company | the company name |
+| Job Name | the job title |
+| Status | **blank** — an empty Status means "found, not applied yet" |
+| Date Scraped | the day the watcher found it |
+| Date Applied | **blank** — you fill this in when you apply |
+| App Link | `Link`, hyperlinked to the posting |
+
+Status and Date Applied stay yours to fill in. Your six statuses
+(App sent / Ghosted / OA / Interview / Offer / Rejected) all describe something
+*you* did, and the scraper hasn't done any of them.
+
+The whole feature is **off until you set `GSHEET_CREDENTIALS`**. Without it the
+watcher behaves exactly as it always has.
+
+---
+
+## 1. Make a service account
+
+A service account is a robot Google account with its own email address. It
+suits a background launchd job because it never needs a browser and its
+credentials don't expire — unlike normal OAuth, which would pop a consent
+screen your watcher can't answer at 3am.
+
+1. Go to <https://console.cloud.google.com/> and create a project (any name —
+   `job-scraper` is fine).
+2. **APIs & Services → Library →** search **Google Sheets API → Enable**.
+3. **APIs & Services → Credentials → Create credentials → Service account**.
+   Give it a name, click through the optional role/access steps — it needs **no**
+   project roles at all; access comes from sharing the sheet in step 2 below.
+4. Open the new service account → **Keys → Add key → Create new key → JSON**.
+   A `.json` file downloads.
+
+## 2. Share the sheet with it
+
+Open that JSON and copy the `client_email` value — it looks like
+`job-scraper@your-project.iam.gserviceaccount.com`.
+
+In the tracker, hit **Share**, paste that address, give it **Editor**, and
+untick "Notify people". Nothing is written until you do this; the service
+account starts with access to nothing.
+
+## 3. Park the key outside the repo
+
+It's a credential, so keep it where a stray `git add` can't reach it:
+
+```bash
+mkdir -p ~/.config/job-scraper
+mv ~/Downloads/your-project-*.json ~/.config/job-scraper/gsheet-service-account.json
+chmod 600 ~/.config/job-scraper/gsheet-service-account.json
+```
+
+## 4. Point the watcher at it
+
+Install the libraries and uncomment the line in your (git-ignored) `run_tech.sh`:
+
+```bash
+.venv/bin/pip install -r requirements.txt
+```
+
+```bash
+export GSHEET_CREDENTIALS="$HOME/.config/job-scraper/gsheet-service-account.json"
+```
+
+`GSHEET_ID` and `GSHEET_GID` are already defaulted to this tracker and its tab,
+so leave them commented unless you move to a different sheet.
+
+## 5. Check it
+
+```bash
+./run_tech.sh --sheet-check
+```
+
+Writes nothing. It reports the tab it resolved, the header row it found, how
+many roles are already tracked, and which row the next write lands on:
+
+```
+  tab         : 'Fall 2026 New Grad Recruiting' (gid=1940679258)
+  header      : ['Company', 'Job Name', 'Status', 'Date Scraped', 'Date Applied', 'App Link']
+  tracked rows: 1
+  next write  : row 3
+Sheet check: OK ✅
+```
+
+**Confirm the tab name is the one you expect.** The gid in your link belongs to
+a tab called *Fall 2026 New Grad Recruiting* in the copy you downloaded, which
+is an odd name for a mid-level tracker. If that's a leftover name, fine — the
+sync follows the **gid**, not the name, so renaming the tab won't break it. If
+it's genuinely the wrong tab, set `GSHEET_GID` to the right one (open the tab
+and read `gid=` out of the URL).
+
+If this prints `403 / PERMISSION_DENIED`, step 2 didn't take — re-share the
+sheet with the `client_email`.
+
+## 6. Backfill what's already been seen
+
+The very first watcher run seeds its store **silently** (no email), so those
+roles would otherwise never reach the sheet. Push them in:
+
+```bash
+./run_tech.sh --backfill-sheet
+```
+
+Each backfilled row keeps the date it was *first seen*, not today, so
+Date Scraped stays honest. Rows already in the sheet are skipped, so running it
+twice is harmless.
+
+From here it's automatic: every `--once` run that emails you also writes those
+same roles into the tracker.
+
+---
+
+## How duplicates are avoided
+
+Two independent guards:
+
+* The watcher's own sqlite store (`seen_tech_jobs.sqlite3`) means a job is only
+  ever "new" once, so it's only ever offered to the sheet once.
+* `sheets_sync` still reads the sheet before every write and skips anything
+  already there, keyed on the posting URL (falling back to company + title).
+  So wiping the sqlite store, or running a backfill twice, won't double up
+  rows.
+
+## Where new rows go
+
+The tracker has formatted template rows running hundreds of rows past the last
+real entry, each carrying the literal text `Link` in column F. Google's own
+`values.append` looks for the last row containing *any* data, so it would land
+below all of those and leave a several-hundred-row gap. The sync finds the last
+non-empty **Company** cell instead and writes directly underneath it, into your
+existing formatting.
+
+## Turning it off
+
+Comment out `GSHEET_CREDENTIALS` in `run_tech.sh`. The watcher goes back to
+email-only.
+
+## If the sheet breaks
+
+Sheet failures are logged and swallowed — a Google outage, a revoked key or a
+deleted tab will never cost you a job alert or corrupt the dedup store. Check
+`tech/tech_watcher.log` for a line starting `Sheet sync failed`, then re-run
+`--sheet-check`. Anything missed while the sheet was down can be recovered with
+`--backfill-sheet`.

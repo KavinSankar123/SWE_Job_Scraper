@@ -24,4 +24,19 @@ export EMAIL_TO="you@gmail.com"
 #   export EMAIL_SMTP_HOST="smtp.yourprovider.com"
 #   export EMAIL_SMTP_PORT="465"
 
+# ---------------------------------------------------------------------------
+# Google Sheets sync (optional) — appends every new mid-level role to your
+# application tracker. Leave GSHEET_CREDENTIALS commented out to turn it off.
+# Setup walkthrough: tech/SHEETS_SETUP.md
+# ---------------------------------------------------------------------------
+
+# Path to the service-account JSON key. This file is a credential — keep it
+# outside the repo so it can never be committed.
+# export GSHEET_CREDENTIALS="$HOME/.config/job-scraper/gsheet-service-account.json"
+
+# Which spreadsheet and which tab. These already point at the tracker; change
+# them only if you move to a different sheet.
+# export GSHEET_ID="1kntHhfWMeW1EeT8ZPfse8FzMQQkOzUnIg2AQqTp7z3w"
+# export GSHEET_GID="1940679258"
+
 exec .venv/bin/python tech/tech_watcher.py "$@"
