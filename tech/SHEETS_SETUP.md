@@ -150,8 +150,26 @@ roles would otherwise never reach the sheet. Push them in:
 ```
 
 Each backfilled row keeps the date it was *first seen*, not today, so
-Date Scraped stays honest (when your tab has that column). Rows already in the sheet are skipped, so running it
-twice is harmless.
+Date Scraped stays honest (when your tab has that column). Rows already in the
+sheet are skipped, so running it twice is harmless.
+
+To write only the more recent roles, bound it by the date they were first seen:
+
+```bash
+./run_tech.sh --backfill-sheet --since 2026-09-04
+```
+
+The bound is **inclusive** — a job first seen at any time on 2026-09-04 is
+written. It reports how many of the store's roles fall in range before writing.
+A row with no first_seen recorded is left out rather than guessed into range.
+
+One subtlety: first_seen is stored in **UTC**, so a job found late in the
+evening US time carries the following day's date. If a job sits right on your
+boundary, that is why.
+
+> If you cleared the tab to start over, leave the **header row** in place. The
+> sync reads it to decide which column each value goes in, and refuses to write
+> to a tab with no Company or Job Name header rather than guess at the layout.
 
 From here it's automatic: every `--once` run that emails you also writes those
 same roles into the tracker.
