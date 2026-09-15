@@ -68,6 +68,21 @@ page). Everything else works without it:
 .venv/bin/pip install playwright && .venv/bin/playwright install chromium
 ```
 
+## What's running in the background?
+
+```bash
+./status.sh
+```
+
+One place for the whole picture: which launchd agents are installed and loaded,
+**which checkout each one actually runs**, any live `--interval` loop or nohup'd
+process (and a warning if two are running for the same watcher), cron entries,
+and when each watcher last did something.
+
+A launchd agent is normally *not* a running process — it fires `--once` on a
+timer and exits within seconds — so "loaded" is what you want to see, not
+"running".
+
 ## Staying up to date
 
 New companies get added upstream over time. To pick them up:
