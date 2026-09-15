@@ -810,28 +810,59 @@ def email_db() -> int:
     return 0 if ok else 1
 
 
-def backfill_sheet() -> int:
-    """Push every role already in the dedup store into the Google Sheets tracker.
+def _store_rows(con: sqlite3.Connection, since: str | None = None) -> list[tuple]:
+    """Rows from the dedup store, optionally only those first seen on/after `since`.
+
+    `since` is an INCLUSIVE yyyy-mm-dd bound compared against the DATE part of
+    first_seen, so a job seen at any time on that day is kept. A row with no
+    first_seen recorded is excluded when filtering — its date is unknown, and
+    guessing it into the range would be worse than leaving it out.
+    """
+    sql = "SELECT company, title, url, first_seen FROM seen_tech"
+    params: tuple = ()
+    if since:
+        sql += " WHERE first_seen IS NOT NULL AND substr(first_seen, 1, 10) >= ?"
+        params = (since,)
+    sql += " ORDER BY first_seen, company, title"
+    return con.execute(sql, params).fetchall()
+
+
+def backfill_sheet(since: str | None = None) -> int:
+    """Push roles from the dedup store into the Google Sheets tracker.
 
     For the roles seeded by the first (silent) run, which were never emailed and
     so never synced. Each row keeps the date it was FIRST seen rather than today,
     so "Date Scraped" stays honest. Rows already in the sheet are skipped, so
     running this twice is harmless.
+
+    With `since`, only roles first seen on or after that date are written.
     """
     if not sheets_sync.is_enabled():
         log.error("GSHEET_CREDENTIALS is not set — see tech/SHEETS_SETUP.md.")
         return 2
 
+    if since:
+        try:
+            datetime.strptime(since, "%Y-%m-%d")
+        except ValueError:
+            log.error("--since wants a date as yyyy-mm-dd, got %r.", since)
+            return 2
+
     con = db_connect()
     try:
-        rows = con.execute(
-            "SELECT company, title, url, first_seen FROM seen_tech ORDER BY first_seen, company, title"
-        ).fetchall()
+        total = con.execute("SELECT COUNT(*) FROM seen_tech").fetchone()[0]
+        rows = _store_rows(con, since)
     finally:
         con.close()
 
-    if not rows:
+    if not total:
         log.info("Store is empty — nothing to backfill. Run --once first to populate it.")
+        return 0
+    if since:
+        log.info("%d of %d tracked role(s) were first seen on or after %s.",
+                 len(rows), total, since)
+    if not rows:
+        log.info("Nothing to backfill.")
         return 0
 
     sheet_rows = [
@@ -1218,6 +1249,31 @@ def selftest() -> int:
     ok &= _check("fill-links: an ambiguous company+title is skipped, not guessed",
                  amb == [] and [x[0] for x in amb_skipped] == [2])
 
+    # --- --since: an INCLUSIVE date bound on first_seen ---------------------- #
+    mem = sqlite3.connect(":memory:")
+    mem.execute("""CREATE TABLE seen_tech (key TEXT PRIMARY KEY, company TEXT,
+                   job_id TEXT, title TEXT, location TEXT, department TEXT,
+                   url TEXT, first_seen TEXT)""")
+    mem.executemany(
+        "INSERT INTO seen_tech VALUES (?,?,?,?,?,?,?,?)",
+        [("a", "Early", "1", "SWE", "", "", "u1", "2026-09-03T23:59:59+00:00"),
+         # midnight and the last second of the boundary day both count as "on" it
+         ("b", "Boundary AM", "2", "SWE", "", "", "u2", "2026-09-04T00:00:00+00:00"),
+         ("c", "Boundary PM", "3", "SWE", "", "", "u3", "2026-09-04T23:59:59+00:00"),
+         ("d", "Later", "4", "SWE", "", "", "u4", "2026-09-10T12:00:00+00:00"),
+         ("e", "Undated", "5", "SWE", "", "", "u5", None)])
+
+    got = [r[0] for r in _store_rows(mem, "2026-09-04")]
+    ok &= _check(f"--since keeps the boundary day and after, drops earlier (got {got})",
+                 got == ["Boundary AM", "Boundary PM", "Later"])
+    ok &= _check("--since excludes a row with no first_seen rather than guessing",
+                 "Undated" not in got)
+    ok &= _check("no --since returns the whole store",
+                 len(_store_rows(mem)) == 5)
+    ok &= _check("--since after every row returns nothing",
+                 _store_rows(mem, "2027-01-01") == [])
+    mem.close()
+
     ok &= _check("sheet: column letters for the write range",
                  [sheets_sync._col_letter(i) for i in (0, 4, 5, 25, 26)]
                  == ["A", "E", "F", "Z", "AA"])
@@ -1254,6 +1310,9 @@ def main() -> int:
     ap.add_argument("--backfill-sheet", action="store_true",
                     help="Push every role already in the store into the Google Sheet, "
                          "then exit. Skips rows the sheet already has.")
+    ap.add_argument("--since", metavar="YYYY-MM-DD",
+                    help="With --backfill-sheet: only write roles first seen on or "
+                         "after this date (inclusive).")
     ap.add_argument("--fill-links", action="store_true",
                     help="Fill the App Link cell on sheet rows that name a known job "
                          "but have no link (e.g. rows you typed in by hand). Dry run "
@@ -1274,7 +1333,10 @@ def main() -> int:
     if args.sheet_check:
         return sheets_sync.check()
     if args.backfill_sheet:
-        return backfill_sheet()
+        return backfill_sheet(since=args.since)
+    if args.since:
+        log.error("--since only means something with --backfill-sheet.")
+        return 2
     if args.fill_links:
         return fill_links(apply=args.apply)
     if args.apply:
