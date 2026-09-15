@@ -210,17 +210,27 @@ def _service():
     return build("sheets", "v4", credentials=creds, cache_discovery=False)
 
 
+def _meta(svc, sheet_id: str) -> tuple[str, list[tuple[str, int]]]:
+    """The spreadsheet's own title, and every tab as (title, gid)."""
+    meta = svc.spreadsheets().get(
+        spreadsheetId=sheet_id,
+        fields="properties.title,sheets.properties(sheetId,title)").execute()
+    tabs = [(sh["properties"]["title"], sh["properties"]["sheetId"])
+            for sh in meta.get("sheets", [])]
+    return meta.get("properties", {}).get("title", "?"), tabs
+
+
+def tab_url(sheet_id: str, gid: int) -> str:
+    return f"https://docs.google.com/spreadsheets/d/{sheet_id}/edit#gid={gid}"
+
+
 def _tab_title(svc, sheet_id: str, gid: int) -> str:
     """Resolve a numeric gid to its tab title, so renaming the tab can't break us."""
-    meta = svc.spreadsheets().get(
-        spreadsheetId=sheet_id, fields="sheets.properties(sheetId,title)").execute()
-    for sh in meta.get("sheets", []):
-        if sh["properties"]["sheetId"] == gid:
-            return sh["properties"]["title"]
-    known = ", ".join(
-        f'{sh["properties"]["title"]} (gid={sh["properties"]["sheetId"]})'
-        for sh in meta.get("sheets", [])
-    )
+    _, tabs = _meta(svc, sheet_id)
+    for title, sid in tabs:
+        if sid == gid:
+            return title
+    known = ", ".join(f"{t} (gid={g})" for t, g in tabs)
     raise SheetError(f"No tab with gid={gid} in that spreadsheet. Tabs present: {known}")
 
 
@@ -389,9 +399,17 @@ def check() -> int:
                   "the service account's client_email as an Editor.")
         return 1
 
+    try:
+        file_title, tabs = _meta(svc, sheet_id)
+    except Exception:  # noqa: BLE001 - diagnostics only, never fail the check
+        file_title, tabs = "?", []
+
     print(f"  credentials : {creds_path}")
-    print(f"  spreadsheet : {sheet_id}")
+    print(f"  spreadsheet : {file_title!r}")
     print(f"  tab         : {title!r} (gid={gid})")
+    print(f"  OPEN THIS   : {tab_url(sheet_id, gid)}")
+    print("                (this is the exact tab rows are written to — if it is not")
+    print("                 the one you have been looking at, that is the mismatch)")
     print(f"  header      : {list(layout.headers)}")
     print(f"  tracked rows: {len(_existing_keys(grid, layout))}")
     print(f"  next write  : row {_first_free_row(grid, layout)}")
@@ -400,6 +418,24 @@ def check() -> int:
         col = layout.index.get(field)
         where = f"column {_col_letter(col)}" if col is not None else "NOT IN SHEET"
         print(f"      {_PRETTY[field]:<13} {where}")
+
+    if len(tabs) > 1:
+        print(f"  all {len(tabs)} tabs in this file:")
+        try:
+            resp = svc.spreadsheets().values().batchGet(
+                spreadsheetId=sheet_id,
+                ranges=[f"'{t}'!1:1" for t, _ in tabs]).execute()
+            heads = [r.get("values", [[]])[0] if r.get("values") else []
+                     for r in resp.get("valueRanges", [])]
+        except Exception:  # noqa: BLE001
+            heads = [[] for _ in tabs]
+        for (t, g), head in zip(tabs, heads):
+            mark = " <-- writing here" if g == gid else ""
+            print(f"      {t!r} (gid={g}){mark}")
+            print(f"          header: {head}")
+    else:
+        print("  this file has exactly one tab — so the sheet you are looking at with")
+        print("  different columns is a DIFFERENT FILE (or a downloaded copy of this one).")
 
     missing = layout.missing_optional()
     if missing:
