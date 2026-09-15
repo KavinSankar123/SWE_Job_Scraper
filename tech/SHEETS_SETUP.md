@@ -8,14 +8,15 @@ next to `send_email()` — it does **not** read your inbox. The email and the
 sheet row come from the same data, so nothing has to be parsed back out of an
 email, and changing the email template can never break the sync.
 
-What lands in the sheet:
+Values are matched to columns by **header name**, so a reordered or partial
+tracker still gets correct rows. What lands in the sheet:
 
 | Column | Value |
 |---|---|
 | Company | the company name |
 | Job Name | the job title |
 | Status | **blank** — an empty Status means "found, not applied yet" |
-| Date Scraped | the day the watcher found it |
+| Date Scraped | the day the watcher found it (only if your tab has this column) |
 | Date Applied | **blank** — you fill this in when you apply |
 | App Link | `Link`, hyperlinked to the posting |
 
@@ -84,26 +85,60 @@ so leave them commented unless you move to a different sheet.
 ./run_tech.sh --sheet-check
 ```
 
-Writes nothing. It reports the tab it resolved, the header row it found, how
-many roles are already tracked, and which row the next write lands on:
+Writes nothing. It reports the tab it resolved, the header row it found, which
+column each value will go in, and which row the next write lands on:
 
 ```
   tab         : 'Fall 2026 New Grad Recruiting' (gid=1940679258)
-  header      : ['Company', 'Job Name', 'Status', 'Date Scraped', 'Date Applied', 'App Link']
+  header      : ['Company', 'Job Name', 'Status', 'Date Applied', 'App Link']
   tracked rows: 1
   next write  : row 3
-Sheet check: OK ✅
+  columns     :
+      Company       column A
+      Job Name      column B
+      Status        column C
+      Date Scraped  NOT IN SHEET
+      Date Applied  column D
+      App Link      column E
+
+  NOTE: this tab has no Date Scraped column.
 ```
 
-**Confirm the tab name is the one you expect.** The gid in your link belongs to
-a tab called *Fall 2026 New Grad Recruiting* in the copy you downloaded, which
-is an odd name for a mid-level tracker. If that's a leftover name, fine — the
-sync follows the **gid**, not the name, so renaming the tab won't break it. If
-it's genuinely the wrong tab, set `GSHEET_GID` to the right one (open the tab
-and read `gid=` out of the URL).
+**Check the `columns` block.** Values are placed by **header name**, not by
+position, so a reordered or widened tracker still gets correct rows and a column
+the sheet doesn't have is left out rather than shifting everything after it.
+
+If a column you want reads `NOT IN SHEET`, add one whose header is exactly that
+text — anywhere in the row — and re-run the check. To get **Date Scraped**
+recorded, insert a column with that header; until then rows sync fine without it.
+
+Also confirm the tab name is the one you expect. The gid in the tracker link
+belongs to a tab called *Fall 2026 New Grad Recruiting*, which is an odd name for
+a mid-level tracker. If that's a leftover name, fine — the sync follows the
+**gid**, not the name, so renaming the tab won't break it. If it's genuinely the
+wrong tab, set `GSHEET_GID` (open the tab and read `gid=` out of the URL).
 
 If this prints `403 / PERMISSION_DENIED`, step 2 didn't take — re-share the
 sheet with the `client_email`.
+
+### If pip won't run at all
+
+```
+zsh: .venv/bin/pip: bad interpreter: .../.venv/bin/python: no such file
+```
+
+That's a broken virtualenv, not a missing package — a venv bakes an absolute
+path into every script in `.venv/bin/`, so copying the project folder to another
+machine or path (or losing the Python it was built from) kills it. `setup.sh`
+reuses an existing `.venv`, so you have to delete it first:
+
+```bash
+deactivate 2>/dev/null
+rm -rf .venv
+./setup.sh
+```
+
+Your git-ignored `run_tech.sh` and sqlite store are untouched by this.
 
 ## 6. Backfill what's already been seen
 
@@ -115,7 +150,7 @@ roles would otherwise never reach the sheet. Push them in:
 ```
 
 Each backfilled row keeps the date it was *first seen*, not today, so
-Date Scraped stays honest. Rows already in the sheet are skipped, so running it
+Date Scraped stays honest (when your tab has that column). Rows already in the sheet are skipped, so running it
 twice is harmless.
 
 From here it's automatic: every `--once` run that emails you also writes those
@@ -137,7 +172,8 @@ Two independent guards:
 ## Where new rows go
 
 The tracker has formatted template rows running hundreds of rows past the last
-real entry, each carrying the literal text `Link` in column F. Google's own
+real entry, each carrying the literal text `Link` in the App Link column.
+Google's own
 `values.append` looks for the last row containing *any* data, so it would land
 below all of those and leave a several-hundred-row gap. The sync finds the last
 non-empty **Company** cell instead and writes directly underneath it, into your

@@ -3,23 +3,34 @@
 sheets_sync.py — Append newly-scraped mid-level roles to the Google Sheets
 application tracker, at the same moment tech_watcher.py emails them.
 
-Columns written (A-F), matching the tracker:
+Columns are matched by HEADER NAME, not by position
+---------------------------------------------------
+The tracker's header row is read on every run and each value is placed in the
+column whose header names it:
 
     Company | Job Name | Status | Date Scraped | Date Applied | App Link
+
+Only Company and Job Name are required; the rest are filled in when the sheet
+has them. This is deliberate. Position-based writing looks fine right up until
+a tracker turns out to be missing a column, or someone inserts or reorders one
+— at which point every value after it lands one column off and nothing
+complains. Matching on the header means a reordered, widened or partial tracker
+still gets correct rows, and a column the sheet does not have is skipped rather
+than shifting everything after it.
 
 Status and Date Applied are left BLANK on purpose — an empty Status means
 "found, not applied yet". You fill in "App sent" and the date by hand when you
 actually apply, so the six defined statuses keep meaning what they say.
 
-Two things about the tracker shape that this module has to work around
-----------------------------------------------------------------------
-  * Column F of the template rows already contains the literal text "Link",
-    dragged down hundreds of rows past the last real entry. Sheets' own
-    `values.append` looks for the last row containing ANY data, so it would
-    land far below the real data and leave a several-hundred-row hole. We find
-    the last non-empty **Company** cell instead and write directly under it.
-  * That "Link" is display text over a hyperlink, not a bare URL. We write
-    `=HYPERLINK("...","Link")` so new rows look like the ones already there.
+One more thing about the tracker's shape
+----------------------------------------
+Its App Link column carries the literal text "Link" for hundreds of formatted
+template rows past the last real entry. Sheets' own `values.append` looks for
+the last row containing ANY data, so it would land far below the real data and
+leave a several-hundred-row hole. We find the last non-empty **Company** cell
+instead and write directly under it. That "Link" is display text over a
+hyperlink, not a bare URL, so rows are written as `=HYPERLINK("...","Link")`
+and read back with `valueRenderOption=FORMULA` to recover the URL for dedup.
 
 Config (environment variables, set in run_tech.sh):
 
@@ -36,6 +47,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
@@ -48,23 +60,115 @@ DEFAULT_GID = 1940679258
 
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 
+# How many columns to read. Generous — the header row decides the real width.
+_READ_COLS = "Z"
+
+# Header text (normalised) -> the field it holds. The tracker's own spellings,
+# plus obvious synonyms, so a lightly-renamed column still lines up.
+_FIELD_BY_HEADER = {
+    "company": "company",
+    "job name": "job_name",
+    "job title": "job_name",
+    "role": "job_name",
+    "status": "status",
+    "date scraped": "date_scraped",
+    "scraped": "date_scraped",
+    "date found": "date_scraped",
+    "date applied": "date_applied",
+    "applied": "date_applied",
+    "app link": "app_link",
+    "application link": "app_link",
+    "link": "app_link",
+    "job link": "app_link",
+}
+
+# Without these two a row would not identify a job at all.
+REQUIRED_FIELDS = ("company", "job_name")
+# Written when present, skipped when the sheet has no such column.
+OPTIONAL_FIELDS = ("status", "date_scraped", "date_applied", "app_link")
+
+_PRETTY = {
+    "company": "Company",
+    "job_name": "Job Name",
+    "status": "Status",
+    "date_scraped": "Date Scraped",
+    "date_applied": "Date Applied",
+    "app_link": "App Link",
+}
+
 
 class SheetError(RuntimeError):
     """Raised for configuration problems worth showing the user verbatim."""
 
 
+def _normalise(header: str) -> str:
+    """Fold a header cell to its lookup key: lowercase, collapsed whitespace."""
+    return re.sub(r"\s+", " ", (header or "").strip().lower())
+
+
+@dataclass(frozen=True)
+class Layout:
+    """Which column each field lives in, read from the tab's header row."""
+    index: dict[str, int]              # field -> 0-based column
+    width: int                         # how many columns the header row spans
+    headers: tuple[str, ...]
+
+    def has(self, field: str) -> bool:
+        return field in self.index
+
+    def missing_optional(self) -> list[str]:
+        return [f for f in OPTIONAL_FIELDS if f not in self.index]
+
+
+def _layout(header_row: list[str]) -> Layout:
+    index: dict[str, int] = {}
+    for col, cell in enumerate(header_row):
+        field = _FIELD_BY_HEADER.get(_normalise(cell))
+        if field and field not in index:        # first column wins on a duplicate
+            index[field] = col
+
+    missing = [_PRETTY[f] for f in REQUIRED_FIELDS if f not in index]
+    if missing:
+        raise SheetError(
+            f"The tab's header row is missing {', '.join(missing)} — got "
+            f"{header_row}. Check GSHEET_GID points at the tracker tab."
+        )
+    return Layout(index=index, width=len(header_row), headers=tuple(header_row))
+
+
+def _col_letter(i: int) -> str:
+    """0-based column index -> spreadsheet letter (0 -> A, 26 -> AA)."""
+    letter = ""
+    i += 1
+    while i:
+        i, rem = divmod(i - 1, 26)
+        letter = chr(ord("A") + rem) + letter
+    return letter
+
+
 @dataclass(frozen=True)
 class SheetRow:
-    """One tracker row, in column order."""
+    """One tracker row, before it is laid out against the sheet's own columns."""
     company: str
     job_name: str
     date_scraped: str          # ISO yyyy-mm-dd; Sheets parses this into a real date
     app_link: str
 
-    def to_values(self) -> list[str]:
-        link = f'=HYPERLINK("{self.app_link}","Link")' if self.app_link else "Link"
-        #      Company        Job Name        Status  Date Scraped        Date Applied
-        return [self.company, self.job_name, "", self.date_scraped, "", link]
+    def to_values(self, layout: Layout) -> list[str]:
+        """Place each value in the column the header row says it belongs in."""
+        values = [""] * layout.width
+        cells = {
+            "company": self.company,
+            "job_name": self.job_name,
+            "date_scraped": self.date_scraped,
+            # Status and Date Applied stay blank — see the module docstring.
+            "app_link": f'=HYPERLINK("{self.app_link}","Link")' if self.app_link else "",
+        }
+        for field, value in cells.items():
+            col = layout.index.get(field)
+            if col is not None:
+                values[col] = value
+        return values
 
 
 # --------------------------------------------------------------------------- #
@@ -143,38 +247,51 @@ def dedup_key(company: str, job_name: str, url: str) -> str:
 
 
 def _read_grid(svc, sheet_id: str, title: str) -> list[list[str]]:
-    """Columns A-F of the tab, formulas intact so HYPERLINK URLs survive."""
+    """The tab's used range, formulas intact so HYPERLINK URLs survive."""
     resp = svc.spreadsheets().values().get(
         spreadsheetId=sheet_id,
-        range=f"'{title}'!A:F",
+        range=f"'{title}'!A:{_READ_COLS}",
         valueRenderOption="FORMULA",
     ).execute()
     return resp.get("values", [])
 
 
-def _existing_keys(grid: list[list[str]]) -> set[str]:
+def _cell(row: list[str], col: int | None) -> str:
+    """Sheets truncates trailing empty cells, so short rows are normal."""
+    if col is None or col >= len(row):
+        return ""
+    return row[col] or ""
+
+
+def _existing_keys(grid: list[list[str]], layout: Layout) -> set[str]:
+    company_col = layout.index["company"]
+    job_col = layout.index["job_name"]
+    link_col = layout.index.get("app_link")
+
     keys: set[str] = set()
     for row in grid[1:]:                       # skip the header
-        company = row[0] if len(row) > 0 else ""
-        job_name = row[1] if len(row) > 1 else ""
-        url = _hyperlink_url(row[5] if len(row) > 5 else "")
+        company = _cell(row, company_col)
+        job_name = _cell(row, job_col)
+        url = _hyperlink_url(_cell(row, link_col))
         if not (company.strip() or url):
             continue
         keys.add(dedup_key(company, job_name, url))
     return keys
 
 
-def _first_free_row(grid: list[list[str]]) -> int:
+def _first_free_row(grid: list[list[str]], layout: Layout) -> int:
     """
     1-based row number just past the last row with a Company set.
 
-    Deliberately keyed on column A alone. The template rows below the real data
-    carry a "Link" in column F, so anything that asks "where does the data end?"
-    across all columns answers several hundred rows too far down.
+    Deliberately keyed on the Company column alone. The template rows below the
+    real data carry a "Link" in the App Link column, so anything that asks
+    "where does the data end?" across all columns answers several hundred rows
+    too far down.
     """
+    company_col = layout.index["company"]
     last = 1                                   # the header row always exists
     for i, row in enumerate(grid, start=1):
-        if row and row[0].strip():
+        if _cell(row, company_col).strip():
             last = i
     return last + 1
 
@@ -196,8 +313,15 @@ def append_rows(rows: list[SheetRow]) -> int:
     title = _tab_title(svc, sheet_id, gid)
 
     grid = _read_grid(svc, sheet_id, title)
-    seen = _existing_keys(grid)
+    if not grid:
+        raise SheetError(f"The tab '{title}' is empty — it needs a header row.")
+    layout = _layout(grid[0])
 
+    for field in layout.missing_optional():
+        log.warning("Sheet: '%s' has no %s column — leaving that value out.",
+                    title, _PRETTY[field])
+
+    seen = _existing_keys(grid, layout)
     fresh: list[SheetRow] = []
     for r in rows:
         key = dedup_key(r.company, r.job_name, r.app_link)
@@ -210,13 +334,14 @@ def append_rows(rows: list[SheetRow]) -> int:
         log.info("Sheet: all %d role(s) already tracked in '%s'.", len(rows), title)
         return 0
 
-    start = _first_free_row(grid)
+    start = _first_free_row(grid, layout)
     end = start + len(fresh) - 1
+    last_col = _col_letter(layout.width - 1)
     svc.spreadsheets().values().update(
         spreadsheetId=sheet_id,
-        range=f"'{title}'!A{start}:F{end}",
+        range=f"'{title}'!A{start}:{last_col}{end}",
         valueInputOption="USER_ENTERED",       # dates become dates, HYPERLINK runs
-        body={"values": [r.to_values() for r in fresh]},
+        body={"values": [r.to_values(layout) for r in fresh]},
     ).execute()
 
     log.info("Sheet: added %d role(s) to '%s' at row %d.", len(fresh), title, start)
@@ -246,12 +371,15 @@ def sync_jobs(jobs, when: str | None = None) -> int:
 
 
 def check() -> int:
-    """Verify credentials, tab and permissions without writing anything."""
+    """Verify credentials, tab and columns without writing anything."""
     try:
         creds_path, sheet_id, gid = _config()
         svc = _service()
         title = _tab_title(svc, sheet_id, gid)
         grid = _read_grid(svc, sheet_id, title)
+        if not grid:
+            raise SheetError(f"The tab '{title}' is empty — it needs a header row.")
+        layout = _layout(grid[0])
     except SheetError as e:
         log.error("%s", e)
         return 2
@@ -261,19 +389,29 @@ def check() -> int:
                   "the service account's client_email as an Editor.")
         return 1
 
-    header = grid[0] if grid else []
-    tracked = len(_existing_keys(grid))
     print(f"  credentials : {creds_path}")
     print(f"  spreadsheet : {sheet_id}")
     print(f"  tab         : {title!r} (gid={gid})")
-    print(f"  header      : {header}")
-    print(f"  tracked rows: {tracked}")
-    print(f"  next write  : row {_first_free_row(grid)}")
+    print(f"  header      : {list(layout.headers)}")
+    print(f"  tracked rows: {len(_existing_keys(grid, layout))}")
+    print(f"  next write  : row {_first_free_row(grid, layout)}")
+    print("  columns     :")
+    for field in REQUIRED_FIELDS + OPTIONAL_FIELDS:
+        col = layout.index.get(field)
+        where = f"column {_col_letter(col)}" if col is not None else "NOT IN SHEET"
+        print(f"      {_PRETTY[field]:<13} {where}")
 
-    expected = ["Company", "Job Name", "Status", "Date Scraped", "Date Applied", "App Link"]
-    if [h.strip() for h in header[:6]] != expected:
-        print(f"\n  WARNING: header is not {expected} — check GSHEET_GID points at the "
-              f"right tab.")
-        return 1
+    missing = layout.missing_optional()
+    if missing:
+        pretty = ", ".join(_PRETTY[f] for f in missing)
+        print()
+        print(f"  NOTE: this tab has no {pretty} column.")
+        print("  Rows will still sync correctly — that value is simply left out, and")
+        print("  nothing shifts into the wrong column. To record it, add a column with")
+        print("  that exact header (anywhere in the row — the sync matches on header")
+        print("  text, not position) and re-run this check.")
+        print("\nSheet check: OK — with the note above ✅")
+        return 0
+
     print("\nSheet check: OK ✅")
     return 0

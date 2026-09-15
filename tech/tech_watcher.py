@@ -1038,28 +1038,31 @@ def selftest() -> int:
     ok &= _check(f"US filter drops foreign, even w/ unplaceable sibling (offenders: {bad_drop})",
                  not bad_drop)
 
-    # --- sheet sync: the tracker-shape traps --------------------------------- #
-    # The template rows carry a bare "Link" in column F hundreds of rows past the
-    # last real entry, so the insert point must key on Company (col A) alone.
-    grid = [["Company", "Job Name", "Status", "Date Scraped", "Date Applied", "App Link"],
-            ["IMC Trading", "Graduate Software Engineer", "Rejected", "2026-07-01", "",
-             '=HYPERLINK("https://www.imc.com/us/careers/jobs/4818790101","Link")'],
-            ["", "", "", "", "", "Link"],
-            ["", "", "", "", "", "Link"]]
+    # --- sheet sync: layout is resolved from the header row ------------------ #
+    HDR6 = ["Company", "Job Name", "Status", "Date Scraped", "Date Applied", "App Link"]
+    IMC = '=HYPERLINK("https://www.imc.com/us/careers/jobs/4818790101","Link")'
+
+    # The template rows carry a bare "Link" in the App Link column hundreds of
+    # rows past the last real entry, so the insert point keys on Company alone.
+    grid6 = [HDR6,
+             ["IMC Trading", "Graduate Software Engineer", "Rejected", "2026-07-01", "", IMC],
+             ["", "", "", "", "", "Link"],
+             ["", "", "", "", "", "Link"]]
+    lay6 = sheets_sync._layout(HDR6)
     ok &= _check("sheet: insert row lands under the last Company, not the last 'Link'",
-                 sheets_sync._first_free_row(grid) == 3)
+                 sheets_sync._first_free_row(grid6, lay6) == 3)
     ok &= _check("sheet: blank tab inserts at row 2 (under the header)",
-                 sheets_sync._first_free_row([grid[0]]) == 2)
+                 sheets_sync._first_free_row([HDR6], lay6) == 2)
 
     ok &= _check("sheet: reads the URL back out of a HYPERLINK formula",
-                 sheets_sync._hyperlink_url(grid[1][5])
+                 sheets_sync._hyperlink_url(IMC)
                  == "https://www.imc.com/us/careers/jobs/4818790101")
     ok &= _check("sheet: the 'Link' placeholder is not a URL",
                  sheets_sync._hyperlink_url("Link") == "")
     ok &= _check("sheet: a bare URL cell still reads as a URL",
                  sheets_sync._hyperlink_url("https://x.com/j/1") == "https://x.com/j/1")
 
-    keys = sheets_sync._existing_keys(grid)
+    keys = sheets_sync._existing_keys(grid6, lay6)
     ok &= _check(f"sheet: only real rows count as tracked (got {len(keys)})", len(keys) == 1)
     ok &= _check("sheet: an already-tracked URL is recognised",
                  sheets_sync.dedup_key("IMC Trading", "Graduate Software Engineer",
@@ -1068,13 +1071,49 @@ def selftest() -> int:
                  sheets_sync.dedup_key("A", "B", "https://x.com/j/1")
                  == sheets_sync.dedup_key("A", "B", "https://x.com/j/1/"))
 
-    vals = sheets_sync.SheetRow("Stripe", "Software Engineer II", "2026-09-15",
-                                "https://stripe.com/j/1").to_values()
-    ok &= _check(f"sheet: row is 6 columns (got {len(vals)})", len(vals) == 6)
+    ROW = sheets_sync.SheetRow("Stripe", "Software Engineer II", "2026-09-15",
+                               "https://stripe.com/j/1")
+    LINK = '=HYPERLINK("https://stripe.com/j/1","Link")'
+    ok &= _check("sheet: full 6-column tracker lays out in order",
+                 ROW.to_values(lay6)
+                 == ["Stripe", "Software Engineer II", "", "2026-09-15", "", LINK])
     ok &= _check("sheet: Status and Date Applied left blank for a scraped role",
-                 vals[2] == "" and vals[4] == "")
-    ok &= _check("sheet: App Link written as a HYPERLINK titled 'Link'",
-                 vals[5] == '=HYPERLINK("https://stripe.com/j/1","Link")')
+                 ROW.to_values(lay6)[2] == "" and ROW.to_values(lay6)[4] == "")
+
+    # The live tracker has no Date Scraped column. Positional writing would slide
+    # the date into Date Applied and the link off the end of the row.
+    HDR5 = ["Company", "Job Name", "Status", "Date Applied", "App Link"]
+    lay5 = sheets_sync._layout(HDR5)
+    ok &= _check("sheet: a missing Date Scraped column is dropped, not shifted",
+                 ROW.to_values(lay5) == ["Stripe", "Software Engineer II", "", "", LINK])
+    ok &= _check("sheet: missing column is reported as such",
+                 lay5.missing_optional() == ["date_scraped"])
+    ok &= _check("sheet: row width always matches the header width",
+                 len(ROW.to_values(lay5)) == 5 and len(ROW.to_values(lay6)) == 6)
+
+    # Reordered / widened headers must still land each value correctly.
+    HDRX = ["App Link", "Notes", "Job Name", "Company", "Date Scraped"]
+    layx = sheets_sync._layout(HDRX)
+    ok &= _check("sheet: reordered headers still place every value right",
+                 ROW.to_values(layx)
+                 == [LINK, "", "Software Engineer II", "Stripe", "2026-09-15"])
+    ok &= _check("sheet: dedup reads Company/App Link from their real columns",
+                 sheets_sync._existing_keys([HDRX, [IMC, "x", "Grad SWE", "IMC Trading", ""]],
+                                            layx)
+                 == {"https://www.imc.com/us/careers/jobs/4818790101"})
+    ok &= _check("sheet: header matching ignores case and stray whitespace",
+                 sheets_sync._layout(["  COMPANY ", "job  name"]).index
+                 == {"company": 0, "job_name": 1})
+
+    try:
+        sheets_sync._layout(["Company", "Status", "App Link"])
+        ok &= _check("sheet: a header row with no Job Name is rejected", False)
+    except sheets_sync.SheetError:
+        ok &= _check("sheet: a header row with no Job Name is rejected", True)
+
+    ok &= _check("sheet: column letters for the write range",
+                 [sheets_sync._col_letter(i) for i in (0, 4, 5, 25, 26)]
+                 == ["A", "E", "F", "Z", "AA"])
 
     print("\nSELF-TEST:", "ALL PASSED ✅" if ok else "FAILURES ❌")
     return 0 if ok else 1
