@@ -1065,11 +1065,28 @@ def selftest() -> int:
     keys = sheets_sync._existing_keys(grid6, lay6)
     ok &= _check(f"sheet: only real rows count as tracked (got {len(keys)})", len(keys) == 1)
     ok &= _check("sheet: an already-tracked URL is recognised",
-                 sheets_sync.dedup_key("IMC Trading", "Graduate Software Engineer",
-                                       "https://www.imc.com/us/careers/jobs/4818790101/") in keys)
+                 keys.holds("IMC Trading", "Graduate Software Engineer",
+                            "https://www.imc.com/us/careers/jobs/4818790101/"))
     ok &= _check("sheet: a trailing slash does not create a duplicate",
                  sheets_sync.dedup_key("A", "B", "https://x.com/j/1")
                  == sheets_sync.dedup_key("A", "B", "https://x.com/j/1/"))
+
+    # A row typed in by hand has no link, so it can only be matched on title. A
+    # scraped job always HAS a link — match strictly on URL and the hand-added
+    # row goes unrecognised and the same job is filed twice.
+    hand = sheets_sync._existing_keys(
+        [HDR6, ["Stripe", "Software Engineer II", "App sent", "", "2026-09-01", ""]], lay6)
+    ok &= _check("sheet: a hand-added row with no link still blocks a duplicate",
+                 hand.holds("Stripe", "Software Engineer II", "https://stripe.com/j/1"))
+    ok &= _check("sheet: a different role at the same company is still new",
+                 not hand.holds("Stripe", "Backend Engineer", "https://stripe.com/j/2"))
+    # ...but two linked rows are matched on URL alone, so two genuinely different
+    # postings that share a title are not collapsed into one.
+    linked = sheets_sync._existing_keys(
+        [HDR6, ["Stripe", "Software Engineer", "", "", "",
+                '=HYPERLINK("https://stripe.com/j/1","Link")']], lay6)
+    ok &= _check("sheet: a same-title posting with its own URL is not over-merged",
+                 not linked.holds("Stripe", "Software Engineer", "https://stripe.com/j/9"))
 
     ROW = sheets_sync.SheetRow("Stripe", "Software Engineer II", "2026-09-15",
                                "https://stripe.com/j/1")
@@ -1099,7 +1116,7 @@ def selftest() -> int:
                  == [LINK, "", "Software Engineer II", "Stripe", "2026-09-15"])
     ok &= _check("sheet: dedup reads Company/App Link from their real columns",
                  sheets_sync._existing_keys([HDRX, [IMC, "x", "Grad SWE", "IMC Trading", ""]],
-                                            layx)
+                                            layx).urls
                  == {"https://www.imc.com/us/careers/jobs/4818790101"})
     ok &= _check("sheet: header matching ignores case and stray whitespace",
                  sheets_sync._layout(["  COMPANY ", "job  name"]).index

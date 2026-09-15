@@ -273,20 +273,50 @@ def _cell(row: list[str], col: int | None) -> str:
     return row[col] or ""
 
 
-def _existing_keys(grid: list[list[str]], layout: Layout) -> set[str]:
+@dataclass
+class Tracked:
+    """What the sheet already holds, indexed two ways.
+
+    Rows that carry a link are matched strictly on that link. Rows WITHOUT one —
+    typically typed in by hand — can only be matched on company + title, so they
+    are indexed separately. Keeping the two apart matters: a scraped job always
+    has a URL, so if linkless rows were not indexed by title the scraper would
+    fail to recognise a hand-added row and file a second copy of the same job.
+    Indexing every row by title instead would over-merge two genuinely different
+    postings that happen to share a title at one company.
+    """
+    urls: set[str]                   # rows that have a link
+    linkless: set[str]               # company::title of rows that do not
+
+    def __len__(self) -> int:
+        return len(self.urls) + len(self.linkless)
+
+    def holds(self, company: str, job_name: str, url: str) -> bool:
+        if url and url.strip().rstrip("/").lower() in self.urls:
+            return True
+        return dedup_key(company, job_name, "") in self.linkless
+
+    def add(self, company: str, job_name: str, url: str) -> None:
+        if url:
+            self.urls.add(url.strip().rstrip("/").lower())
+        else:
+            self.linkless.add(dedup_key(company, job_name, ""))
+
+
+def _existing_keys(grid: list[list[str]], layout: Layout) -> Tracked:
     company_col = layout.index["company"]
     job_col = layout.index["job_name"]
     link_col = layout.index.get("app_link")
 
-    keys: set[str] = set()
+    tracked = Tracked(urls=set(), linkless=set())
     for row in grid[1:]:                       # skip the header
         company = _cell(row, company_col)
         job_name = _cell(row, job_col)
         url = _hyperlink_url(_cell(row, link_col))
         if not (company.strip() or url):
             continue
-        keys.add(dedup_key(company, job_name, url))
-    return keys
+        tracked.add(company, job_name, url)
+    return tracked
 
 
 def _first_free_row(grid: list[list[str]], layout: Layout) -> int:
@@ -334,10 +364,12 @@ def append_rows(rows: list[SheetRow]) -> int:
     seen = _existing_keys(grid, layout)
     fresh: list[SheetRow] = []
     for r in rows:
-        key = dedup_key(r.company, r.job_name, r.app_link)
-        if key in seen:
+        if seen.holds(r.company, r.job_name, r.app_link):
             continue
-        seen.add(key)                          # guard against dupes within one batch
+        seen.add(r.company, r.job_name, r.app_link)   # dupes within one batch too
+        # A hand-added row for this job is already in the sheet, so it also has to
+        # block a second copy arriving by title later in the same batch.
+        seen.linkless.add(dedup_key(r.company, r.job_name, ""))
         fresh.append(r)
 
     if not fresh:
