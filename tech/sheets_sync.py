@@ -390,6 +390,100 @@ def append_rows(rows: list[SheetRow]) -> int:
     return len(fresh)
 
 
+def plan_link_fills(
+    grid: list[list[str]], layout: Layout, known: dict[str, str]
+) -> tuple[list[tuple[int, str, str, str]], list[tuple[int, str, str]]]:
+    """
+    Find rows that name a job we know the URL for but carry no link.
+
+    Returns (fills, skipped) where a fill is (1-based row, company, title, url).
+    Only ever targets an EMPTY App Link cell — the bare "Link" placeholder counts
+    as empty, a real hyperlink does not — so nothing you already put there is
+    touched. Rows with no Company are the sheet's blank template rows and are
+    left alone even though they say "Link".
+    """
+    company_col = layout.index["company"]
+    job_col = layout.index["job_name"]
+    link_col = layout.index["app_link"]
+
+    fills: list[tuple[int, str, str, str]] = []
+    skipped: list[tuple[int, str, str]] = []
+    for i, row in enumerate(grid[1:], start=2):        # row 1 is the header
+        company = _cell(row, company_col).strip()
+        job_name = _cell(row, job_col).strip()
+        if not company:                                # template row, not a job
+            continue
+        if _hyperlink_url(_cell(row, link_col)):       # already linked
+            continue
+        url = known.get(dedup_key(company, job_name, ""))
+        if url is None:
+            skipped.append((i, company, job_name))
+        elif url:
+            fills.append((i, company, job_name, url))
+        else:
+            skipped.append((i, company, job_name))     # ambiguous, see build_known
+    return fills, skipped
+
+
+def fill_links(known: dict[str, str], apply: bool = False) -> int:
+    """
+    Fill the App Link cell on rows that name a job we know the URL for.
+
+    Dry run by default: it prints what it would change and writes nothing. Pass
+    apply=True to commit. Only empty link cells are written, one cell at a time,
+    so no other column on those rows is touched.
+    """
+    _, sheet_id, gid = _config()
+    svc = _service()
+    title = _tab_title(svc, sheet_id, gid)
+
+    grid = _read_grid(svc, sheet_id, title)
+    if not grid:
+        raise SheetError(f"The tab '{title}' is empty — it needs a header row.")
+    layout = _layout(grid[0])
+    if not layout.has("app_link"):
+        raise SheetError(
+            f"The tab '{title}' has no App Link column, so there is nothing to fill. "
+            f"Header: {list(layout.headers)}"
+        )
+
+    fills, skipped = plan_link_fills(grid, layout, known)
+
+    if skipped:
+        log.info("%d row(s) left alone — no job in the store matches them:", len(skipped))
+        for row_no, company, job_name in skipped[:10]:
+            log.info("    row %-4d %s — %s", row_no, company, job_name)
+        if len(skipped) > 10:
+            log.info("    ...and %d more", len(skipped) - 10)
+
+    if not fills:
+        log.info("Nothing to fill — every row with a known job already has a link.")
+        return 0
+
+    col = _col_letter(layout.index["app_link"])
+    log.info("%s %d link(s) in '%s':", "Filling" if apply else "WOULD fill", len(fills), title)
+    for row_no, company, job_name, url in fills:
+        log.info("    %s%-4d %s — %s", col, row_no, company, url)
+
+    if not apply:
+        log.info("Dry run — nothing written. Re-run with --apply to commit.")
+        return 0
+
+    svc.spreadsheets().values().batchUpdate(
+        spreadsheetId=sheet_id,
+        body={
+            "valueInputOption": "USER_ENTERED",
+            "data": [
+                {"range": f"'{title}'!{col}{row_no}",
+                 "values": [[f'=HYPERLINK("{url}","Link")']]}
+                for row_no, _, _, url in fills
+            ],
+        },
+    ).execute()
+    log.info("Filled %d link(s).", len(fills))
+    return len(fills)
+
+
 def sync_jobs(jobs, when: str | None = None) -> int:
     """
     Push Job objects (from tech_watcher) into the tracker. Never raises — a

@@ -855,6 +855,59 @@ def backfill_sheet() -> int:
     return 0
 
 
+def fill_links(apply: bool = False) -> int:
+    """Fill the App Link cell on tracker rows that name a job we have a URL for.
+
+    For rows typed in by hand, which have a company and title but no link. The
+    match is on company + title, since a linkless row has nothing else to go on.
+
+    Dry run unless --apply is passed. Only ever writes into an EMPTY link cell,
+    so a link already in the sheet is never overwritten.
+    """
+    if not sheets_sync.is_enabled():
+        log.error("GSHEET_CREDENTIALS is not set — see tech/SHEETS_SETUP.md.")
+        return 2
+
+    con = db_connect()
+    try:
+        rows = con.execute(
+            "SELECT company, title, url FROM seen_tech WHERE url IS NOT NULL AND url != ''"
+        ).fetchall()
+    finally:
+        con.close()
+
+    if not rows:
+        log.info("Store is empty — nothing to match against. Run --once first.")
+        return 0
+
+    # company::title -> url. Two postings sharing a title at one company cannot be
+    # told apart by a linkless row, so map those to "" and leave the row alone
+    # rather than guess which posting the person meant.
+    known: dict[str, str] = {}
+    for company, title, url in rows:
+        key = sheets_sync.dedup_key(company, title, "")
+        if key in known and known[key] != url:
+            known[key] = ""                      # ambiguous
+        else:
+            known.setdefault(key, url)
+
+    ambiguous = sum(1 for v in known.values() if not v)
+    if ambiguous:
+        log.info("%d company+title pair(s) match more than one posting — skipping those.",
+                 ambiguous)
+
+    log.info("Matching against %d known job(s).", len(rows))
+    try:
+        sheets_sync.fill_links(known, apply=apply)
+    except sheets_sync.SheetError as e:
+        log.error("%s", e)
+        return 2
+    except Exception as e:  # noqa: BLE001
+        log.error("Fill failed: %s", e)
+        return 1
+    return 0
+
+
 def preview(query: str | None = None) -> int:
     """Scrape and PRINT the matching mid-level roles. Sends no email and never touches
     the dedup store — use it to sanity-check the filter before turning the watcher on."""
@@ -1128,6 +1181,43 @@ def selftest() -> int:
     except sheets_sync.SheetError:
         ok &= _check("sheet: a header row with no Job Name is rejected", True)
 
+    # --- --fill-links: only ever fills an EMPTY link cell on a real row ------- #
+    fill_grid = [HDR6,
+                 # 2: hand-added, no link, job is in the store -> fill
+                 ["Stripe", "Software Engineer II", "App sent", "", "2026-09-01", ""],
+                 # 3: hand-added, the placeholder counts as empty -> fill
+                 ["Databricks", "Backend Engineer", "", "", "", "Link"],
+                 # 4: already linked -> never touched
+                 ["Airbnb", "Android Engineer", "", "", "", IMC],
+                 # 5: no company -> a blank template row, not a job
+                 ["", "", "", "", "", "Link"],
+                 # 6: no link and the store has never seen it -> reported, not filled
+                 ["Some Startup", "Founding Engineer", "", "", "", ""]]
+    known = {sheets_sync.dedup_key("Stripe", "Software Engineer II", ""):
+             "https://stripe.com/j/1",
+             sheets_sync.dedup_key("Databricks", "Backend Engineer", ""):
+             "https://databricks.com/j/2",
+             sheets_sync.dedup_key("Airbnb", "Android Engineer", ""):
+             "https://airbnb.com/j/3"}
+    fills, skipped = sheets_sync.plan_link_fills(fill_grid, lay6, known)
+    ok &= _check(f"fill-links: fills the two linkless rows (got {[f[0] for f in fills]})",
+                 [(f[0], f[3]) for f in fills]
+                 == [(2, "https://stripe.com/j/1"), (3, "https://databricks.com/j/2")])
+    ok &= _check("fill-links: never overwrites a link already in the sheet",
+                 4 not in [f[0] for f in fills])
+    ok &= _check("fill-links: leaves blank template rows alone despite their 'Link'",
+                 5 not in [f[0] for f in fills] and 5 not in [x[0] for x in skipped])
+    ok &= _check("fill-links: reports a row no known job matches",
+                 [x[0] for x in skipped] == [6])
+
+    # A title shared by two postings at one company can't be resolved from a
+    # linkless row, so it is mapped to "" upstream and must be left alone.
+    amb, amb_skipped = sheets_sync.plan_link_fills(
+        [HDR6, ["Stripe", "Software Engineer", "", "", "", ""]],
+        lay6, {sheets_sync.dedup_key("Stripe", "Software Engineer", ""): ""})
+    ok &= _check("fill-links: an ambiguous company+title is skipped, not guessed",
+                 amb == [] and [x[0] for x in amb_skipped] == [2])
+
     ok &= _check("sheet: column letters for the write range",
                  [sheets_sync._col_letter(i) for i in (0, 4, 5, 25, 26)]
                  == ["A", "E", "F", "Z", "AA"])
@@ -1164,6 +1254,12 @@ def main() -> int:
     ap.add_argument("--backfill-sheet", action="store_true",
                     help="Push every role already in the store into the Google Sheet, "
                          "then exit. Skips rows the sheet already has.")
+    ap.add_argument("--fill-links", action="store_true",
+                    help="Fill the App Link cell on sheet rows that name a known job "
+                         "but have no link (e.g. rows you typed in by hand). Dry run "
+                         "unless --apply is also passed.")
+    ap.add_argument("--apply", action="store_true",
+                    help="Commit the changes --fill-links would make.")
     ap.add_argument("--notify-seed", action="store_true",
                     help="Email on the first (seeding) run too.")
     ap.add_argument("--selftest", action="store_true", help="Run offline tests and exit.")
@@ -1179,6 +1275,11 @@ def main() -> int:
         return sheets_sync.check()
     if args.backfill_sheet:
         return backfill_sheet()
+    if args.fill_links:
+        return fill_links(apply=args.apply)
+    if args.apply:
+        log.error("--apply only means something with --fill-links.")
+        return 2
     if args.list:
         by_ats: dict[str, list[str]] = {}
         for c in COMPANIES:

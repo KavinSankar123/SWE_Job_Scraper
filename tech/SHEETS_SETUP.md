@@ -156,6 +156,32 @@ twice is harmless.
 From here it's automatic: every `--once` run that emails you also writes those
 same roles into the tracker.
 
+## 7. Fill in links on rows you added by hand
+
+A row you typed in yourself has a company and a title but no link. If the
+watcher has since seen that job, it can fill the App Link cell in for you:
+
+```bash
+./run_tech.sh --fill-links           # dry run — prints what it would change
+./run_tech.sh --fill-links --apply   # actually write
+```
+
+It is a **dry run by default**, so you always see the list before anything is
+written. What it will and won't touch:
+
+* Only an **empty** App Link cell is written. The bare `Link` placeholder counts
+  as empty; a real hyperlink does not, so a link already in the sheet is never
+  overwritten.
+* Only rows with a **Company** set. The hundreds of blank template rows say
+  `Link` too, and are left alone.
+* Only the App Link cell, one cell at a time — no other column on the row is
+  touched, so your Status and dates are safe.
+* Matching is on **company + title**, because a linkless row has nothing else to
+  go on. If two postings at one company share a title, that row is skipped and
+  reported rather than guessed at.
+
+Rows it can't match are listed too, so you can see what was left behind.
+
 ---
 
 ## How duplicates are avoided
@@ -164,10 +190,16 @@ Two independent guards:
 
 * The watcher's own sqlite store (`seen_tech_jobs.sqlite3`) means a job is only
   ever "new" once, so it's only ever offered to the sheet once.
-* `sheets_sync` still reads the sheet before every write and skips anything
-  already there, keyed on the posting URL (falling back to company + title).
-  So wiping the sqlite store, or running a backfill twice, won't double up
-  rows.
+* `sheets_sync` reads the sheet before every write and skips anything already
+  there. Rows are indexed two ways: a row **with** a link is matched on that
+  link, a row **without** one on company + title. Both are needed. A scraped job
+  always has a URL, so matching only on URL would fail to recognise a row you
+  typed in by hand and would file a second copy of the same job; matching
+  everything on title would merge two genuinely different postings that happen
+  to share a title at one company.
+
+So wiping the sqlite store, running a backfill twice, or having already added a
+row yourself won't double up rows.
 
 ## Where new rows go
 
